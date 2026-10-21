@@ -1,0 +1,137 @@
+# tracing.py - 요청별 trace 와 contexts 수집 (Observability)
+"""한 번의 /query 요청 동안 일어난 단계(가드, 파서, 검색, 도구, 에이전트, LLM)를 기록하고
+답변 근거가 된 문서(contexts)를 모읍니다.
+
+- 요청마다 새 RequestState 를 만들고 contextvars 로 도구 함수에 전달합니다 (전역 상태 없음)
+- 모든 input/output 은 생년월일 패턴을 <BIRTH> 로 바꾼 뒤 300자로 자릅니다
+- LangChain 콜백(TraceCallback)이 LLM·도구 호출을, 노드 코드가 가드·파서 단계를 직접 append 합니다
+"""
+import contextvars
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from langchain_core.callbacks import BaseCallbackHandler
+
+MAX_LEN = 300
+
+# 4자리·2자리 연도 날짜, 출생 시각 표현을 가린다 (파서가 놓친 경우까지 대비한 2중 마스킹)
+_BIRTH_LIKE = [
+    re.compile(r"(?<!\d)(?:19|20)\d{2}\s*년\s*(?:윤\s*)?\d{1,2}\s*월\s*\d{1,2}\s*일"),
+    re.compile(r"(?<!\d)(?:19|20)\d{2}\s*[.\-/]\s*\d{1,2}\s*[.\-/]\s*\d{1,2}(?!\d)"),
+    re.compile(r"(?<!\d)\d{2}\s*년\s*(?:윤\s*)?\d{1,2}\s*월\s*\d{1,2}\s*일"),
+    re.compile(r"(?<!\d)\d{2}\s*년\s*생"),
+    re.compile(r"(?<!\d)(?:19|20)\d{6}(?!\d)"),
+]
+
+
+def mask_text(text: str) -> str:
+    for pat in _BIRTH_LIKE:
+        text = pat.sub("<BIRTH>", text)
+    return text
+
+
+def _clip(value: Any) -> str:
+    text = value if isinstance(value, str) else repr(value)
+    text = mask_text(text)
+    return text if len(text) <= MAX_LEN else text[:MAX_LEN] + "…"
+
+
+@dataclass
+class RequestState:
+    """요청 하나의 trace·contexts·사주 요약을 담는다."""
+    trace: list[dict] = field(default_factory=list)
+    contexts: dict[str, dict] = field(default_factory=dict)   # doc_id → context (입력 순서 유지)
+    chart: dict | None = None                                 # 사주 요약 (원본 생년월일 없음)
+    started: float = field(default_factory=time.perf_counter)
+
+    def add_step(self, step: str, input: Any = "", output: Any = "", type: str | None = None,
+                 name: str | None = None, latency_ms: int | None = None) -> None:
+        entry = {"step": step, "input": _clip(input), "output": _clip(output)}
+        if type:
+            entry["type"] = type
+        if name:
+            entry["name"] = name
+        if latency_ms is not None:
+            entry["latency_ms"] = latency_ms
+        self.trace.append(entry)
+
+    def add_context(self, doc_id: str, text: str, source: str, doc_type: str) -> None:
+        text = mask_text(text)
+        if doc_id in self.contexts:
+            if text not in self.contexts[doc_id]["text"]:
+                self.contexts[doc_id]["text"] += "\n" + text
+            return
+        self.contexts[doc_id] = {"doc_id": doc_id, "text": text, "source": source, "doc_type": doc_type}
+
+    def context_list(self) -> list[dict]:
+        return list(self.contexts.values())
+
+    def tool_names(self) -> list[str]:
+        return [t["name"] for t in self.trace if t.get("type") in ("tool", "retrieval") and t.get("name")]
+
+    @property
+    def total_latency_ms(self) -> int:
+        return int((time.perf_counter() - self.started) * 1000)
+
+
+_current: contextvars.ContextVar[RequestState | None] = contextvars.ContextVar("request_state", default=None)
+
+
+def start_request() -> RequestState:
+    state = RequestState()
+    _current.set(state)
+    return state
+
+
+def current() -> RequestState:
+    state = _current.get()
+    if state is None:   # 테스트 등에서 요청 밖에서 도구를 부른 경우
+        state = start_request()
+    return state
+
+
+class TraceCallback(BaseCallbackHandler):
+    """LLM 호출, 도구 호출, Supervisor 핸드오프를 trace 에 남긴다."""
+
+    def __init__(self, state: RequestState):
+        self.state = state
+        self._starts: dict[Any, tuple[float, str, str]] = {}
+
+    @staticmethod
+    def _node(kwargs) -> str:
+        return (kwargs.get("metadata") or {}).get("langgraph_node") or "llm"
+
+    def on_chat_model_start(self, serialized, messages, *, run_id, **kwargs):
+        last = messages[0][-1] if messages and messages[0] else ""
+        self._starts[run_id] = (time.perf_counter(), self._node(kwargs), getattr(last, "content", last))
+
+    def on_llm_end(self, response, *, run_id, **kwargs):
+        start, node, last = self._starts.pop(run_id, (time.perf_counter(), "llm", ""))
+        try:
+            msg = response.generations[0][0].message
+            calls = [c["name"] for c in getattr(msg, "tool_calls", []) or []]
+            out = f"tool_calls={calls}" if calls else msg.content
+        except Exception:
+            out = ""
+        self.state.add_step(f"llm:{node}", last, out, type="llm", name=node,
+                            latency_ms=int((time.perf_counter() - start) * 1000))
+
+    def on_tool_start(self, serialized, input_str, *, run_id, **kwargs):
+        name = (serialized or {}).get("name", "")
+        self._starts[run_id] = (time.perf_counter(), name, input_str)
+
+    def on_tool_end(self, output, *, run_id, **kwargs):
+        start, name, input_str = self._starts.pop(run_id, (time.perf_counter(), "", ""))
+        latency = int((time.perf_counter() - start) * 1000)
+        text = getattr(output, "content", output)
+        if name.startswith("transfer_to_"):
+            self.state.add_step(f"agent:{name[len('transfer_to_'):]}", "", "handoff", type="agent",
+                                name=name[len("transfer_to_"):], latency_ms=latency)
+        elif name.startswith("transfer_back"):
+            return
+        else:
+            # 내부 MCP 호출은 도구 함수가 직접 tool 로 기록하므로 여기서는 에이전트용 도구만 남긴다
+            self.state.add_step(f"agent_tool:{name}", input_str, text, type="agent_tool", name=name,
+                                latency_ms=latency)

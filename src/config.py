@@ -11,7 +11,9 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # Bedrock
 REGION = "us-east-1"
-MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+# Bedrock 일일 토큰 한도에 걸리면 SAJU_LLM_MODEL 로 임시 교체한다 (예: us.anthropic.claude-haiku-4-5-20251001-v1:0)
+MODEL = os.getenv("SAJU_LLM_MODEL", DEFAULT_MODEL)
 EMBED_MODEL = "amazon.titan-embed-text-v2:0"
 
 # 데이터 경로
