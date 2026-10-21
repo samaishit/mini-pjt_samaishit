@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tgz
+
+# git 의존성(ssaju)은 npm이 lockfile resolved를 git+ssh로 재작성해
+# SSH 키 없는 사용자의 설치를 깨뜨린다. package.json이 커밋 해시로 핀 고정하므로
+# lockfile 대신 그것으로 재현성을 보장한다.
+package-lock.json

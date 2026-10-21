@@ -18,3 +18,4 @@ evaluation/results_*.json
 
 # Ouroboros 로컬 상태
 .ouroboros/
+.venv-eval/

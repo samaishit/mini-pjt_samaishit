@@ -1,0 +1,12 @@
+# 평가 전용 환경 (RAGAS). 메인 앱(Python 3.14)과 분리한다.
+# 이유: ragas 의존성 scikit-network 가 Python 3.14 휠이 없고(C++ 빌드 필요),
+#       ragas 0.4.3 은 langchain-community 0.4 에서 삭제된 모듈을 import 한다.
+# 생성: uv venv --python 3.12 .venv-eval
+#       uv pip install --python .venv-eval/Scripts/python.exe -r requirements-eval.txt
+ragas==0.4.3
+langchain==0.3.30
+langchain-core==0.3.86
+langchain-community==0.3.31
+langchain-aws==0.2.35
+langchain-openai==0.3.35
+python-dotenv==1.2.4

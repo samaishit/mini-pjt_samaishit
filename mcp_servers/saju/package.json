@@ -1,0 +1,41 @@
+{
+  "name": "saju-mcp",
+  "version": "1.0.0",
+  "description": "MCP server wrapping the ssaju engine — exposes saju/manseryeok calculation as a tool for MCP clients.",
+  "license": "MIT",
+  "author": "molpass",
+  "type": "module",
+  "bin": {
+    "saju-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ssaju": "git+https://github.com/molpass/ssaju.git#688cfecd266a903cd7193567e2c1605dbb28921e",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "hermes-agent",
+    "claude",
+    "vibe-coding",
+    "korean",
+    "telegram",
+    "fortune-telling",
+    "saju",
+    "bazi",
+    "four-pillars"
+  ]
+}
