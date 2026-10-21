@@ -40,6 +40,15 @@ RESIDENCE_RE = re.compile(r"이사|주거|살기|동네|지역")
 SAJU_RE = re.compile(r"운세|용신|오행|십성|기운|좋은\s*달|조심|주의할|어느\s*달|운으로|운이야|운인지|의미|사주")
 
 
+# 에이전트별로 검색 결과와 함께 늘 넘길 규칙 문서 (추천·평가 근거를 답변에 인용할 수 있게)
+RULE_DOCS_BY_AGENT = {
+    "travel_agent": ["rule:direction:oheng", "rule:travel:timing"],
+    "plan_agent": ["rule:travel:plan-rating", "rule:residence:move-timing"],
+}
+# 계획 전용 질문에서 코드가 만든 '계획 평가'로 대체하는 작성자 섹션
+PLAN_REPLACED_SECTIONS = {"계획 평가", "여행 추천", "이사 시기", "주거 추천"}
+
+
 def required_agents(question: str) -> list[str]:
     """질문에서 반드시 거쳐야 할 전문 에이전트를 고른다."""
     if PLAN_EVAL_RE.search(question) and "어디" not in question:
@@ -69,6 +78,18 @@ def llm(max_tokens: int = 4096) -> ChatBedrockConverse:
 
 ERROR_MESSAGE = "죄송합니다. 일시적인 오류로 답변을 만들지 못했습니다. 잠시 후 다시 시도해 주세요."
 BIRTH_REQUEST_RE = re.compile(r"(생년월일|출생\s*정보|음력\s*생년월일|양력\s*생년월일)[^.]{0,20}(알려|필요|입력|주시면|주세요)")
+# <BIRTH> 로 가려진 출생 연·월을 LLM 이 짐작해 쓴 표현 (예: '양력 12월 생', '1988년생')
+BIRTH_GUESS_RE = re.compile(r"(\d{1,2}\s*월|\d{2,4}\s*년)\s*(출생|생)(이|인|의|입니다)?(?![가-힣])")
+# 오행 한자의 한글 읽기 (조사 고르기용)
+ELEMENT_READING = {"木": "목", "火": "화", "土": "토", "金": "금", "水": "수"}
+
+
+def josa(word: str, with_final: str, without_final: str) -> str:
+    """앞말의 받침 유무로 조사를 고른다 (한자 오행은 한글 읽기로 판단). 예: josa('삿포로', '은', '는') → '는'"""
+    last = ELEMENT_READING.get(word[-1], word[-1]) if word else ""
+    if "가" <= last <= "힣":
+        return with_final if (ord(last) - 0xAC00) % 28 else without_final
+    return with_final
 
 
 def get_text(message) -> str:
@@ -144,6 +165,7 @@ COMPOSE_PROMPT = """당신은 사주 라이프 플래너의 최종 답변 작성
 14. 여러 달을 추천하는 요청이면 보고에 나온 달마다 국내·해외 추천을 빠짐없이 옮긴다.
 15. 용신 일치 오행은 사주 요약 표의 '용신 일치' 값 그대로 쓴다.
 16. 근거 목록에 mcp:saju 가 있으면 사주 요약이 있는 것이다. 이때 생년월일을 다시 묻지 않는다.
+    생년월일은 <BIRTH> 로 가려져 있으므로 출생 연·월('12월생', '1988년생' 등)을 짐작해 쓰지 않는다.
 17. 용신·오행·십성의 의미를 묻는 질문에는 rule 문서를 근거로 개념, 사용자 사주에서의 의미, 생활 활용(방위·환경·계절) 예시를 각각 한 문장 이상 쓴다.
 18. doc_id 는 doc_ids 필드에만 넣고 text 에는 [doc_id] 같은 태그를 쓰지 않는다.
     대신 해석 근거는 "명리 해설 「용신이란」에 따르면"처럼 문서 제목으로 자연스럽게 밝힌다.
@@ -248,14 +270,20 @@ class SajuPlannerApp:
         st = self._state()
         chart_block = tools.chart_text(st.chart) if st.chart else "(출생 정보 없음: 사주 요약이 없습니다)"
         need = required_agents(s["masked"])
+        st.route = need
         indices = tools.target_month_indices(s["masked"])
         content = (f"[기준일] {config.REFERENCE_DATE}\n[사주 요약 · doc_id=mcp:saju]\n{chart_block}\n\n"
                    f"[사용자 질문]\n{s['masked']}\n\n[필수 호출 에이전트] {', '.join(need)}")
         if indices:
-            content += f"\n[대상 절기 월 번호] {indices}"
-        if "saju_agent" in need:
+            # 번호만 주면 양력 월로 오해하므로 간지와 기간을 함께 적는다
+            months = {m["index"]: m for m in st.chart["months"]}
+            labels = ", ".join(f"{i}번={months[i]['month_ganzhi']}월({months[i]['start_date']} ~ {months[i]['end_date']})"
+                               for i in indices)
+            content += f"\n[대상 절기 월 번호] {indices} → {labels} (절기 월 번호이며 양력 월이 아님)"
+        extra = [d for name, ids in RULE_DOCS_BY_AGENT.items() if name in need for d in ids]
+        if "saju_agent" in need or extra:
             # 해석 근거가 필요한 질문은 규칙 문서를 먼저 검색해 에이전트에게 함께 넘긴다 (RAG)
-            rules = tools.pre_retrieve_rules(s["masked"])
+            rules = tools.pre_retrieve_rules(s["masked"], extra_ids=extra)
             content += "\n\n[관련 해석 규칙]\n" + "\n".join(f"- [{r['doc_id']}] {r['text']}" for r in rules)
         st.add_step("route", s["masked"], {"agents": need, "month_indices": indices}, type="route", name="intent_router")
         callbacks = {"callbacks": [TraceCallback(st)], "recursion_limit": 40}
@@ -289,7 +317,11 @@ class SajuPlannerApp:
             return []
         ys = set(st.chart["yongsin_elements"])
         months = {m["index"]: m for m in st.chart["months"]}
-        claims = []
+        basis = ["mcp:saju"] + [d for d in ("rule:direction:oheng",) if d in st.contexts]
+        claims = [Claim(section="여행 추천",
+                        text=f"용신이 {'·'.join(st.chart['yongsin_elements'])}이므로, 그 달에 가기 좋은 곳 가운데 용신 오행의 "
+                             f"기운이 있고 용신 오행의 방위(木 동, 火 남, 土 중앙, 金 서, 水 북)에 가까운 곳을 장소 DB 점수로 골랐습니다.",
+                        doc_ids=basis)]
         for idx in sorted(st.travel_picks):
             row, m = st.travel_picks[idx], months[idx]
             parts, ids = [], ["mcp:saju"]
@@ -297,8 +329,11 @@ class SajuPlannerApp:
                 pick = (row.get(scope) or {}).get("pick")
                 if not pick:
                     continue
-                match = "·".join(e for e in pick["elements"] if e in ys) or pick["elements"][0]
-                parts.append(f"{label} {pick['name']}({pick['direction']}쪽, {match} 기운)")
+                match = "·".join(e for e in pick["elements"] if e in ys)
+                aspect = f"용신 {match} 기운" if match else f"{pick['elements'][0]} 기운"
+                if (pick.get("score_breakdown") or {}).get("direction"):
+                    aspect += "·용신 방위"
+                parts.append(f"{label} {pick['name']}({pick['direction']}쪽, {aspect})")
                 ids.append(pick["id"])
             if not parts:
                 continue
@@ -306,6 +341,51 @@ class SajuPlannerApp:
             claims.append(Claim(section="여행 추천",
                                 text=f"{m['month_ganzhi']}월({m['start_date']} ~ {m['end_date']}): {', '.join(parts)}을(를) 추천합니다.{note}",
                                 doc_ids=ids))
+        return claims if len(claims) > 1 else []
+
+    def _plan_claims(self) -> list[Claim]:
+        """evaluate_plan 결과로 계획별 평가 문장을 만든다 (LLM 없이: 절기 월 매핑·등급·근거·대안)."""
+        st = self._state()
+        if not st.chart:
+            return []
+        ys = set(st.chart["yongsin_elements"])
+        claims = []
+        for r in st.plan_results:
+            plan = r["plan"]
+            what = "이사" if plan["kind"] == "move" else f"{plan['place']} 여행" if plan.get("place") else "여행"
+            ids = [d for d in ("mcp:saju", "tool:evaluate_plan", r.get("basis")) if d and d in st.contexts]
+            label = f"{plan['year']}년 " if plan.get("year") else ""
+            label += f"{plan['month']}월 {what}"
+            if r.get("rating") is None:
+                claims.append(Claim(section="계획 평가", text=f"{label}{josa(what, '은', '는')} {r['message']}",
+                                    doc_ids=ids))
+                continue
+            span = f"{r['ganzhi']}월({r['start_date']} ~ {r['end_date']})"
+            match = "·".join(r["month_yongsin_match"])
+            why = [f"그 달 기운이 용신 {match}{josa(match, '과', '와')} 맞습니다." if match
+                   else "그 달 기운에는 용신 오행이 없습니다."]
+            if r["clash_with_day_branch"]:
+                why.append("일지와 충하는 달이라 큰 변화는 신중해야 합니다.")
+            if r.get("place_id"):
+                place = next(p for p in tools.PLACES if p["id"] == r["place_id"])
+                hit = "·".join(e for e in place["elements"] if e in ys)
+                kind = f"용신 {hit} 기운이 있는 곳" if hit else "용신 오행과 겹치지 않는 곳"
+                why.append(f"{place['name']}{josa(place['name'], '은', '는')} 장소 DB에서 {kind}입니다.")
+                if r["place_id"] in st.contexts:
+                    ids.append(r["place_id"])
+            elif plan.get("place"):
+                why.append(f"{plan['place']}{josa(plan['place'], '은', '는')} 장소 DB에 없어 달의 기운만으로 평가했습니다.")
+            text = (f"{label}{josa(what, '은', '는')} {span}에 해당하며 평가는 '{r['rating']}'입니다. "
+                    + " ".join(why))
+            alts = [a for a in r.get("alternatives") or [] if a["id"] in st.contexts][:2]
+            if alts:
+                text += f" 대안으로 {', '.join(a['name'] for a in alts)}도 고려해 보세요."   # 장소 DB 안의 대안만
+                ids += [a["id"] for a in alts]
+            if r.get("better_move_months"):
+                months = {m["month_ganzhi"]: m for m in st.chart["months"]}
+                better = [f"{g}월({months[g]['start_date']} ~ {months[g]['end_date']})" for g in r["better_move_months"][:2]]
+                text += f" 이사는 {', '.join(better)}이 더 좋습니다."
+            claims.append(Claim(section="계획 평가", text=text, doc_ids=list(dict.fromkeys(ids))))
         return claims
 
     async def compose(self, s: QueryState) -> QueryState:
@@ -317,15 +397,25 @@ class SajuPlannerApp:
         travel_note = ("19. 월별 여행지 목록(달마다 국내·해외 추천)은 시스템이 '여행 추천' 섹션 끝에 표로 붙인다. "
                        "너는 여행 추천 섹션에 전체 경향을 요약하는 문장 1~2개만 쓰고, 달마다 장소를 나열하지 않는다."
                        if st.travel_picks else "")
+        if st.plan_results and self._plan_only():
+            travel_note += ("\n20. 계획별 평가(절기 월 매핑, 좋음/보통/주의, 근거, 대안)는 시스템이 '계획 평가' 섹션으로 붙인다. "
+                            "너는 계획을 다시 평가하거나 여행지·주거지를 추천하지 말고, 필요하면 '안내' 섹션에 주의점만 쓴다.")
         prompt = COMPOSE_PROMPT.format(feedback=feedback, question=s["masked"], contexts=ctx or "(없음)",
                                        reports=s.get("reports", ""), travel_note=travel_note)
         answer = await self.composer.ainvoke(prompt, {"callbacks": [TraceCallback(st)]})
         return {"answer": answer, "attempts": s.get("attempts", 0) + 1}
 
+    def _plan_only(self) -> bool:
+        """계획 평가만 필요한 질문인가 (여행·주거 추천을 함께 묻지 않음)."""
+        route = self._state().route
+        return "plan_agent" in route and not {"travel_agent", "residence_agent"} & set(route)
+
     def _claim_violations(self, c: Claim, known: set[str]) -> list[str]:
         out = [f"근거 목록에 없는 doc_id {d}" for d in c.doc_ids if d not in known]
         if "mcp:saju" in known and BIRTH_REQUEST_RE.search(c.text):
             out.append("사주 요약이 있는데 생년월일을 다시 요청함")
+        if BIRTH_GUESS_RE.search(c.text):
+            out.append("가려진 출생 연·월을 짐작해 씀")
         if (GANZHI_CHARS & set(c.text) or DATE_RE.search(c.text)) and "mcp:saju" in known and "mcp:saju" not in c.doc_ids:
             out.append("간지·기간을 말하는데 mcp:saju 인용 없음")
         place = tools.lookup_place(c.text)
@@ -399,6 +489,19 @@ class SajuPlannerApp:
                                     f"이번 조회 범위에서는 {span}입니다.", doc_ids=["mcp:saju"]))
         return notes
 
+    def _source_claim(self, claims: list[Claim]) -> Claim | None:
+        """답변 문장이 인용한 명리 규칙 문서의 제목을 사람이 읽는 형태로 밝힌다 (doc_id 태그 대신)."""
+        st = self._state()
+        cited = [d for c in claims for d in c.doc_ids if d.startswith("rule:") and d in st.contexts]
+        cited = list(dict.fromkeys(cited))
+        if not cited:   # 작성자가 인용하지 않았으면 이번 요청에서 검색한 규칙 문서를 밝힌다
+            cited = [d for d, c in st.contexts.items() if c["doc_type"] == "rule" and d.startswith("rule:")][:3]
+        if not cited:
+            return None
+        titles = [f"「{st.contexts[d]['text'].splitlines()[0].strip()}」" for d in cited]
+        return Claim(section="근거 자료", text=f"해석 근거: 명리 해설 문서 {', '.join(titles)} (교육용으로 작성한 자료)",
+                     doc_ids=cited)
+
     async def finalize(self, s: QueryState) -> QueryState:
         extra = [guards.REFUSAL_MESSAGES[c] for c in s["decision"].partial_categories] if s.get("decision") else []
         claims = list(s["answer"].claims)
@@ -407,6 +510,11 @@ class SajuPlannerApp:
             # 월별 표는 코드가 만들므로 작성자가 쓴 월별·장소 문장은 빼고 요약 문장만 남긴다 (중복·오표기 방지)
             claims = [c for c in claims if not (c.section == "여행 추천" and
                                                 (MONTH_RANGE_RE.search(c.text) or tools.lookup_place(c.text, "travel")))]
+        plan = self._plan_claims() if self._plan_only() else []
+        if plan:
+            claims = [c for c in claims if c.section not in PLAN_REPLACED_SECTIONS]
+            pos = max((i for i, c in enumerate(claims) if c.section == "사주 요약"), default=-1) + 1
+            claims[pos:pos] = plan
         notes = self._note_claims()
         for n in notes:
             pos = max((i for i, c in enumerate(claims) if c.section == n.section), default=-1)
@@ -415,6 +523,9 @@ class SajuPlannerApp:
             # 작성자가 쓴 여행 요약 문장 바로 뒤(없으면 맨 끝)에 월별 여행 표를 붙인다
             last_travel = max((i for i, c in enumerate(claims) if c.section == "여행 추천"), default=len(claims) - 1)
             claims[last_travel + 1:last_travel + 1] = travel
+        source = self._source_claim(claims)
+        if source:
+            claims.append(source)
         return {"final": render_answer(StructuredAnswer(claims=claims), extra=extra, disclaimer=guards.DISCLAIMER)}
 
     # ---- 진입점 ----

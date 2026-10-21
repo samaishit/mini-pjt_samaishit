@@ -23,12 +23,14 @@ EVAL_DIR = Path(__file__).resolve().parent
 load_dotenv(EVAL_DIR.parent / ".env")
 
 from langchain_aws import BedrockEmbeddings, ChatBedrockConverse  # noqa: E402
-from ragas import EvaluationDataset, SingleTurnSample, evaluate  # noqa: E402
+from ragas import EvaluationDataset, RunConfig, SingleTurnSample, evaluate  # noqa: E402
 from ragas.embeddings import LangchainEmbeddingsWrapper  # noqa: E402
 from ragas.llms import LangchainLLMWrapper  # noqa: E402
 from ragas.metrics import answer_relevancy, context_precision, context_recall, faithfulness  # noqa: E402
 
-MODEL = os.getenv("SAJU_LLM_MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+MODEL = os.getenv("JUDGE_MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")   # 심사 모델과 같은 평가 LLM
+# Bedrock 스로틀링으로 작업이 시간 초과되지 않도록 동시 실행을 줄이고 제한 시간을 늘린다
+RUN_CONFIG = RunConfig(timeout=600, max_workers=4, max_retries=10, max_wait=90)
 METRICS = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
 
 
@@ -42,7 +44,9 @@ def masked_question(res: dict, fallback: str) -> str:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--round", type=int, required=True)
+    parser.add_argument("--ids", help="쉼표로 구분한 id (점검용, 결과 파일·리포트는 쓰지 않음)")
     args = parser.parse_args()
+    wanted = set(args.ids.split(",")) if args.ids else None
 
     results = json.loads((EVAL_DIR / "runs" / f"round{args.round}.json").read_text(encoding="utf-8"))["results"]
     refs = json.loads((EVAL_DIR / "references.json").read_text(encoding="utf-8"))
@@ -51,7 +55,7 @@ def main():
 
     samples, ids, skipped = [], [], []
     for cid, case in cases.items():
-        if case["category"] == "guardrail" or cid not in refs:
+        if case["category"] == "guardrail" or cid not in refs or (wanted and cid not in wanted):
             continue
         res = results.get(cid)
         if not res or res.get("status") != "ok" or not res.get("contexts"):
@@ -69,23 +73,30 @@ def main():
     emb = LangchainEmbeddingsWrapper(BedrockEmbeddings(model_id="amazon.titan-embed-text-v2:0", region_name="us-east-1"))
     result = evaluate(EvaluationDataset(samples=samples),
                       metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
-                      llm=llm, embeddings=emb, show_progress=False, raise_exceptions=False)
+                      llm=llm, embeddings=emb, run_config=RUN_CONFIG, show_progress=False,
+                      raise_exceptions=False)
     df = result.to_pandas()
     per_row = {}
     for cid, (_, row) in zip(ids, df.iterrows()):
         per_row[cid] = {m: (None if row[m] is None or (isinstance(row[m], float) and math.isnan(row[m]))
                             else round(float(row[m]), 3)) for m in METRICS}
-    means = {}
+    means, valid = {}, {}
     for m in METRICS:
         vals = [v[m] for v in per_row.values() if v[m] is not None]
         means[m] = round(sum(vals) / len(vals), 3) if vals else None
-    out = {"model": MODEL, "n": len(ids), "skipped_no_context": skipped, "means": means, "per_row": per_row}
+        valid[m] = len(vals)   # 오류(스로틀링 등)로 값이 비면 평균에서 빠지므로 유효 건수를 함께 남긴다
+    if wanted:
+        print(json.dumps({"n": len(ids), "means": means, "valid": valid, "per_row": per_row}, ensure_ascii=False))
+        return
+    out = {"model": MODEL, "n": len(ids), "skipped_no_context": skipped, "means": means, "valid": valid,
+           "per_row": per_row}
     (EVAL_DIR / "runs" / f"round{args.round}_ragas.json").write_text(json.dumps(out, ensure_ascii=False, indent=1),
                                                                     encoding="utf-8")
 
     report = EVAL_DIR / f"round{args.round}_report.md"
     if report.exists():
-        table = ["| 지표 | 평균 |", "|---|---|"] + [f"| {m} | {means[m]} |" for m in METRICS]
+        table = ["| 지표 | 평균 | 유효 행 |", "|---|---|---|"]
+        table += [f"| {m} | {means[m]} | {valid[m]}/{len(ids)} |" for m in METRICS]
         table += ["", f"- 대상 {len(ids)}건 (guardrail 제외, contexts 없는 되묻기 응답 제외: {', '.join(skipped) or '없음'})",
                   f"- 평가 LLM `{MODEL}`, 임베딩 Titan v2", "",
                   "| id | " + " | ".join(METRICS) + " |", "|---" * (len(METRICS) + 1) + "|"]
@@ -94,7 +105,7 @@ def main():
         text = re.sub(r"## RAGAS \(guardrail 제외\)\n.*?(?=\n## )", "## RAGAS (guardrail 제외)\n\n" + "\n".join(table) + "\n",
                       text, flags=re.DOTALL)
         report.write_text(text, encoding="utf-8")
-    print(json.dumps({"n": len(ids), "means": means, "skipped": skipped}, ensure_ascii=False))
+    print(json.dumps({"n": len(ids), "means": means, "valid": valid, "skipped": skipped}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

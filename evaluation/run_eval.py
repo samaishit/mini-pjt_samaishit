@@ -28,7 +28,7 @@ from src.agent import build_app
 EVAL_DIR = Path(__file__).resolve().parent
 RUNS_DIR = EVAL_DIR / "runs"
 TIMEOUT_S = 180
-JUDGE_RETRIES = 5
+JUDGE_RETRIES = 6
 PASS_NUM, PASS_DEN = 4, 5   # 전체 통과율 80% 이상 (정수 연산)
 
 
@@ -74,7 +74,7 @@ async def run_cases(cases: list[dict]) -> dict[int, dict]:
 # ---------------------------------------------------------------------------
 # 2) 판정
 # ---------------------------------------------------------------------------
-NEGATION = re.compile(r"^.{0,10}(아니|않|없|마세요|말고)")
+NEGATION = re.compile(r"^.{0,10}(아니|아닌|아닙|않|없|마세요|말고)")
 
 
 def literal_hits(text: str, items: list[str]) -> list[str]:
@@ -154,7 +154,7 @@ def score_case(c: dict, res: dict, use_judge: bool = True) -> dict:
             if "Throttling" not in str(e) or attempt == JUDGE_RETRIES - 1:
                 out.update(passed=False, detail=f"심사 오류: {type(e).__name__}")
                 return out
-            time.sleep(20 * (attempt + 1))
+            time.sleep(30 * (attempt + 1))
     out["checks"]["judge"] = {"version": JUDGE_VERSION, **j.model_dump()}
     passed = j.score >= 4 and not j.forbidden_found and not missing_tools
     out.update(passed=passed, detail=f"judge={j.score}")

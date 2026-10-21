@@ -1,0 +1,100 @@
+{
+ "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+ "n": 14,
+ "skipped_no_context": [
+  "10",
+  "11"
+ ],
+ "means": {
+  "faithfulness": 0.444,
+  "answer_relevancy": null,
+  "context_precision": 1.0,
+  "context_recall": 0.7
+ },
+ "per_row": {
+  "1": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "2": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "3": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "4": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "5": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "6": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": 0.5
+  },
+  "7": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "8": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": 1.0,
+   "context_recall": 1.0
+  },
+  "9": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "12": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": 1.0
+  },
+  "13": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "14": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": 1.0
+  },
+  "15": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "16": {
+   "faithfulness": 0.444,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": 0.0
+  }
+ }
+}

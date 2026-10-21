@@ -8,7 +8,7 @@
 |---|---|---|
 | 1 | LCEL + Pydantic 구조화 출력 (Day 1) | 최종 답변을 `StructuredAnswer{claims[{section, text, doc_ids}]}`로 생성 → 섹션별 렌더링 ([src/schemas.py](src/schemas.py)) |
 | 2 | ReAct (Day 3) | 전문 에이전트 4종을 `create_react_agent`로 구성, 도구 자율 선택 |
-| 3 | RAG: 하이브리드 검색 + 쿼리 확장 (Day 2) | kiwi 형태소 BM25 + Chroma(Titan v2), EnsembleRetriever 0.5/0.5 RRF c=60, 용신 오행 키워드 결정론 확장 ([src/retriever.py](src/retriever.py)) |
+| 3 | RAG: 하이브리드 검색 + 쿼리 확장 (Day 2) | kiwi 형태소 BM25 + Chroma(Titan v2), EnsembleRetriever 0.2/0.8(가중치 비교로 결정) RRF c=60, 용신 오행 키워드 결정론 확장 ([src/retriever.py](src/retriever.py)) |
 | 4 | 도구 다중 (Day 4) | 사주 계산·여행/주거 추천·계획 평가·문서 검색 도구를 한 질의에 조합 |
 | 5 | MCP 서버 연동 (Day 4) | ① mcp-saju **포크**(Node, 기준일 `now`·`get_luck_calendar` 추가) ② 장소 DB FastMCP 서버. 세션을 열어 두고 재사용 |
 | 6 | 가드레일 (Day 5) | 제3자 규칙 → 출생 정보 파서 → 규칙 1차 → LLM 2차 판별, 고정 거절 문구, 부분 거절, 출력 금칙어 검사 ([src/guards.py](src/guards.py)) |

@@ -3,7 +3,7 @@
 
 - 키워드: kiwi 형태소 BM25 (메모리, doc_type별로 미리 걸러서 생성)
 - 벡터: Chroma(영속) + Bedrock Titan Embed v2, doc_type 메타데이터 필터
-- 결합: EnsembleRetriever 0.5/0.5, RRF c=60, doc_id 기준 중복 제거
+- 결합: EnsembleRetriever 0.2/0.8 (BM25/벡터, 가중치 비교 후 결정), RRF c=60, doc_id 기준 중복 제거
 - doc_id: rule:<주제>:<이름>, 장소 id(R-..., T-...)
 
 이 모듈은 LLM 모듈을 import하지 않습니다.
@@ -24,7 +24,7 @@ from langchain_core.documents import Document
 from src import config
 
 TOP_K = 3
-WEIGHTS = (0.5, 0.5)  # (BM25, 벡터) - 1·2차 평가에서 0.2/0.5/0.8을 비교합니다
+WEIGHTS = (0.2, 0.8)  # (BM25, 벡터) - evaluation/retrieval_sweep.py 비교 결과 (1차는 0.5/0.5)
 RRF_C = 60
 DOC_TYPES = ("rule", "place")
 

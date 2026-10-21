@@ -58,6 +58,8 @@ class RequestState:
     chart: dict | None = None                                 # 사주 요약 (원본 생년월일 없음)
     travel_picks: dict[int, dict] = field(default_factory=dict)  # 절기 월 번호 → recommend_travel 결과
     season: str | None = None                                 # 질문이 가리킨 계절 (명리 기준)
+    plan_results: list[dict] = field(default_factory=list)    # evaluate_plan 결과 (계획 평가 문장은 코드가 만든다)
+    route: list[str] = field(default_factory=list)            # 의도 라우터가 고른 필수 에이전트
     started: float = field(default_factory=time.perf_counter)
 
     def add_step(self, step: str, input: Any = "", output: Any = "", type: str | None = None,

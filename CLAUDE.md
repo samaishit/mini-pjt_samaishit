@@ -61,7 +61,7 @@ mini-pjt_samaishit/
 - **개인정보**: 생년월일 원문은 파서와 사주 MCP 호출 인자에만 존재한다. LLM 프롬프트, 로그, trace, 평가 결과 파일에는 `<BIRTH>`만 남긴다. 계산된 간지·십성·용신은 LLM에 보내도 된다.
 - **파서 되묻기**: 2자리 연도, 양/음력 미표기, 존재하지 않는 날짜·윤달, 성별 누락, 오전/오후 없는 시각, 생일 후보 여러 개, 미래 날짜 → LLM 호출 없이 되묻기. 시각 미상 → 시주 제외, 음력에 '윤' 없음 → 평달.
 - **근거**: 간지와 용신은 ssaju 결과만 쓰고 LLM이 추론하지 않는다. 장소는 MCP 점수 도구가 고른 후보에서만 고른다. 답변은 `claims[{text, doc_ids}]` 구조화 출력이고, 출력 미들웨어가 doc_id가 `contexts`에 있는지와 반드시 인용해야 하는 주장(간지·용신·월 범위 → `mcp:saju`, 해석 → `rule:*`, 장소 → 장소 id 또는 `mcp:search_*`)을 검사한다. 위반 시 1회 재생성, 그래도 위반이면 해당 문장을 뺀다.
-- **RAG**: Chroma 컬렉션 하나 + 메모리 BM25(kiwi, doc_type으로 미리 거름), EnsembleRetriever 0.5/0.5, RRF c=60 명시, top-k 3. 결정론 쿼리 확장(용신 오행, 월지, 방위 키워드). 리랭킹 없음. doc_id: `rule:<topic>:<slug>`, 장소 id, `mcp:<도구>`.
+- **RAG**: Chroma 컬렉션 하나 + 메모리 BM25(kiwi, doc_type으로 미리 거름), EnsembleRetriever 0.2/0.8(BM25/벡터, `evaluation/retrieval_sweep.py`로 0.2·0.5·0.8 비교 후 결정), RRF c=60 명시, top-k 3. 결정론 쿼리 확장(용신 오행, 월지, 방위 키워드). 리랭킹 없음. doc_id: `rule:<topic>:<slug>`, 장소 id, `mcp:<도구>`.
 - **기준일**: `config.REFERENCE_DATE = 2026-10-21`. 환경 변수 `SAJU_REFERENCE_DATE`로만 바꾼다(미설정이어도 시스템 날짜가 아니라 고정값). 이 값을 MCP `now`, 프롬프트의 '기준일', trace에 그대로 전달한다. 12개월 범위 = 2026-10-08 ~ 2027-10-07.
 - **절기 월**: 월 경계는 절입일이며 23:59 KST로 판정한다. 계획의 양력 월은 그 달 15일이 속한 절기 월로 매핑한다.
 - **가드레일**: 고정 문구 `REFUSAL_MESSAGES`(injection, off_topic, third_party, real_estate, explicit)만 쓴다. 계획 문장 속 인젝션은 전체 거절. 정상 요청에 부동산·도메인 이탈이 섞이면 해당 부분만 거절하고 나머지는 답한다. 운명론 질문은 거절하지 않고 주의점으로 바꿔 말하며 면책 문구를 붙인다.

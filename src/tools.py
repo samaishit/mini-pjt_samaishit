@@ -214,8 +214,11 @@ KEYWORD_RULE_DOCS = {
 }
 
 
-def pre_retrieve_rules(query: str, k: int = 3) -> list[dict]:
-    """질문과 관련된 명리 규칙 문서를 먼저 검색해 contexts·trace 에 남긴다 (RAG)."""
+def pre_retrieve_rules(query: str, k: int = 3, extra_ids: list[str] | None = None) -> list[dict]:
+    """질문과 관련된 명리 규칙 문서를 먼저 검색해 contexts·trace 에 남긴다 (RAG).
+
+    extra_ids: 검색 결과와 별도로 늘 함께 넘길 규칙 문서 (예: 여행 추천의 방위 근거 rule:direction:oheng)
+    """
     from src.retriever import load_all_docs
     chart = current().chart
     docs = retrieve_docs(query, doc_type="rule", k=k, elements=chart["yongsin_elements"] if chart else None)
@@ -225,6 +228,7 @@ def pre_retrieve_rules(query: str, k: int = 3) -> list[dict]:
         if word in query:
             docs += [by_id[i] for i in ids if i not in have and i in by_id]
             have.update(ids)
+    docs += [by_id[i] for i in extra_ids or [] if i not in have and i in by_id]
     return _record_retrieval(query, docs, "rule")
 
 
@@ -455,10 +459,12 @@ async def evaluate_plan(month: int, kind: str, place: str | None = None, year: i
     if not chart:
         return NO_CHART
     m = find_month(month, year)
+    plan = {"kind": kind, "month": month, "place": place, "year": year}
     if m is None:
         res = {"rating": None, "status": "out_of_window",
                "message": f"조회 범위({chart['months'][0]['start_date']}~{chart['months'][-1]['end_date']}) 밖이라 평가하지 않습니다.",
                "good_move_months": chart["good_move_months"] if kind == "move" else None}
+        current().plan_results.append({**res, "plan": plan})
         current().add_context("tool:evaluate_plan", json.dumps(res, ensure_ascii=False), "tool", "plan")
         return json.dumps(res, ensure_ascii=False)
 
@@ -485,6 +491,9 @@ async def evaluate_plan(month: int, kind: str, place: str | None = None, year: i
         rating = "좋음"
     else:
         rating = "보통"
+    # 계획 연도: 그 달 15일이 이 절기 월에 들어가는 해
+    plan["year"] = next(y for y in (int(m["start_date"][:4]), int(m["end_date"][:4]))
+                        if m["start_date"] <= f"{y}-{month:02d}-15" <= m["end_date"])
     res = {
         "rating": rating,
         "month": f"{m['month_ganzhi']}월 {m['start_date']}~{m['end_date']}",
@@ -496,6 +505,8 @@ async def evaluate_plan(month: int, kind: str, place: str | None = None, year: i
         "better_move_months": chart["good_move_months"] if kind == "move" and rating == "주의" else [],
         "basis": "rule:travel:plan-rating" if kind == "travel" else "rule:residence:move-timing",
     }
+    current().plan_results.append({**res, "plan": plan, "ganzhi": m["month_ganzhi"],
+                                   "start_date": m["start_date"], "end_date": m["end_date"]})
     current().add_context("tool:evaluate_plan", json.dumps(res, ensure_ascii=False), "tool", "plan")
     return json.dumps(res, ensure_ascii=False)
 
