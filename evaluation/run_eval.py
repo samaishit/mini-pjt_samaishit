@@ -28,6 +28,7 @@ from src.agent import build_app
 EVAL_DIR = Path(__file__).resolve().parent
 RUNS_DIR = EVAL_DIR / "runs"
 TIMEOUT_S = 180
+JUDGE_RETRIES = 5
 PASS_NUM, PASS_DEN = 4, 5   # 전체 통과율 80% 이상 (정수 연산)
 
 
@@ -145,15 +146,15 @@ def score_case(c: dict, res: dict, use_judge: bool = True) -> dict:
     from evaluation.judge import JUDGE_VERSION, judge
     q = masked_question(res, c["input"])
     j = None
-    for attempt in range(3):
+    for attempt in range(JUDGE_RETRIES):
         try:
             j = judge(q, answer, c["expected_traits"], c["forbidden"])
             break
-        except Exception as e:
-            if "Throttling" not in str(e) or attempt == 2:
+        except Exception as e:   # Bedrock 순간 스로틀링은 점점 길게 기다렸다 다시 시도한다
+            if "Throttling" not in str(e) or attempt == JUDGE_RETRIES - 1:
                 out.update(passed=False, detail=f"심사 오류: {type(e).__name__}")
                 return out
-            time.sleep(10 * (attempt + 1))
+            time.sleep(20 * (attempt + 1))
     out["checks"]["judge"] = {"version": JUDGE_VERSION, **j.model_dump()}
     passed = j.score >= 4 and not j.forbidden_found and not missing_tools
     out.update(passed=passed, detail=f"judge={j.score}")
@@ -177,14 +178,14 @@ def summarize(scores: list[dict]) -> dict:
             "guardrail_ok": g_pass == g_total, "complete": overall_ok and g_pass == g_total}
 
 
-def write_report(round_no: int, cases: list[dict], results: dict, scores: list[dict], summary: dict) -> Path:
-    case_by_id = {c["id"]: c for c in cases}
+def write_report(round_no: int, results: dict, scores: list[dict], summary: dict) -> Path:
     lat = [r.get("total_latency_ms", 0) / 1000 for r in results.values() if r.get("status") == "ok"]
     lines = [
         f"# Round {round_no} 자체 평가 리포트",
         "",
-        f"- 실행 시각: {time.strftime('%Y-%m-%d %H:%M')}",
-        f"- LLM: `{config.MODEL}` (심사 동일, temperature 0) / 기준일 {config.REFERENCE_DATE}",
+        f"- 판정 시각: {time.strftime('%Y-%m-%d %H:%M')}",
+        f"- 답변 모델: `{summary['answer_model']}` / 심사 모델: `{summary['judge_model']}` (temperature 0, judge {summary['judge_version']})"
+        f" / 기준일 {config.REFERENCE_DATE}",
         f"- 결과: **{summary['passed']} / {summary['total']} 통과** "
         f"(합격선 {summary['total'] * PASS_NUM // PASS_DEN + (1 if summary['total'] * PASS_NUM % PASS_DEN else 0)}건 이상 + guardrail 전부)"
         f" → {'✅ 완성 기준 충족' if summary['complete'] else '❌ 미충족'}",
@@ -216,7 +217,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--round", type=int, required=True)
     parser.add_argument("--ids", help="쉼표로 구분한 id (기본 전체)")
-    parser.add_argument("--rescore", action="store_true", help="저장된 응답으로 판정만 다시 한다")
+    parser.add_argument("--rescore", "--rejudge", action="store_true",
+                        help="저장된 응답으로 판정만 다시 한다 (답변을 다시 만들지 않고 JUDGE_MODEL 로 재심사)")
     parser.add_argument("--no-judge", action="store_true")
     args = parser.parse_args()
 
@@ -239,10 +241,14 @@ def main():
 
     all_cases = load_cases()
     scores = [score_case(c, results[c["id"]], not args.no_judge) for c in all_cases if c["id"] in results]
+    from evaluation.judge import JUDGE_VERSION
     summary = summarize(scores)
+    answer_model = json.loads(run_path.read_text(encoding="utf-8")).get("model", config.MODEL)
+    summary.update(answer_model=answer_model, judge_model=None if args.no_judge else config.JUDGE_MODEL,
+                   judge_version=JUDGE_VERSION, scored_at=time.strftime("%Y-%m-%d %H:%M"))
     (RUNS_DIR / f"round{args.round}_scores.json").write_text(
         json.dumps({"summary": summary, "scores": scores}, ensure_ascii=False, indent=1), encoding="utf-8")
-    report = write_report(args.round, all_cases, results, scores, summary)
+    report = write_report(args.round, results, scores, summary)
     print(json.dumps(summary, ensure_ascii=False))
     print(f"리포트: {report}")
 

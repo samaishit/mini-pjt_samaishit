@@ -26,9 +26,21 @@ _BIRTH_LIKE = [
 ]
 
 
+_YEAR = re.compile(r"(?:19|20)\d{2}")
+
+
+def _mask_match(m: re.Match) -> str:
+    """기준일 이후 연도(조회 범위 날짜)는 생년월일이 아니므로 남긴다."""
+    from src import config
+    y = _YEAR.match(m.group(0))
+    if y and int(y.group(0)) >= int(config.REFERENCE_DATE[:4]):
+        return m.group(0)
+    return "<BIRTH>"
+
+
 def mask_text(text: str) -> str:
     for pat in _BIRTH_LIKE:
-        text = pat.sub("<BIRTH>", text)
+        text = pat.sub(_mask_match, text)
     return text
 
 
@@ -44,6 +56,8 @@ class RequestState:
     trace: list[dict] = field(default_factory=list)
     contexts: dict[str, dict] = field(default_factory=dict)   # doc_id → context (입력 순서 유지)
     chart: dict | None = None                                 # 사주 요약 (원본 생년월일 없음)
+    travel_picks: dict[int, dict] = field(default_factory=dict)  # 절기 월 번호 → recommend_travel 결과
+    season: str | None = None                                 # 질문이 가리킨 계절 (명리 기준)
     started: float = field(default_factory=time.perf_counter)
 
     def add_step(self, step: str, input: Any = "", output: Any = "", type: str | None = None,

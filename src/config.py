@@ -14,6 +14,11 @@ REGION = "us-east-1"
 DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 # Bedrock 일일 토큰 한도에 걸리면 SAJU_LLM_MODEL 로 임시 교체한다 (예: us.anthropic.claude-haiku-4-5-20251001-v1:0)
 MODEL = os.getenv("SAJU_LLM_MODEL", DEFAULT_MODEL)
+# 심사(LLM-as-Judge) 모델은 답변 모델과 분리해 고정한다. SAJU_LLM_MODEL 의 영향을 받지 않는다
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", DEFAULT_MODEL)
+BEDROCK_READ_TIMEOUT_S = 60
+MCP_CALL_TIMEOUT_S = 30
+MAX_QUESTION_CHARS = 1000
 EMBED_MODEL = "amazon.titan-embed-text-v2:0"
 
 # 데이터 경로

@@ -7,10 +7,13 @@ guard_input → saju → supervisor(saju/travel/residence/plan 전문 에이전�
 - compose: 전문 에이전트 보고를 근거가 달린 claims 로 구조화 (LCEL + Pydantic)
 - guard_output: doc_id 존재·필수 근거·금칙어 검사, 위반이면 1회 재생성 후 위반 문장 제거
 """
-import json
+import asyncio
 import re
 from typing import Any, TypedDict
 
+from botocore.exceptions import ReadTimeoutError
+
+from botocore.config import Config as BotoConfig
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, StateGraph
@@ -19,7 +22,7 @@ from langgraph_supervisor import create_supervisor
 
 from src import config, guards, tools
 from src.birth_parser import parse
-from src.schemas import Claim, StructuredAnswer, render_answer
+from src.schemas import Claim, StructuredAnswer, render_answer, strip_doc_tags
 from src.tracing import RequestState, TraceCallback, start_request
 
 GANZHI_CHARS = set("甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥")
@@ -57,7 +60,15 @@ def required_agents(question: str) -> list[str]:
 
 
 def llm(max_tokens: int = 4096) -> ChatBedrockConverse:
-    return ChatBedrockConverse(model=config.MODEL, region_name=config.REGION, temperature=0, max_tokens=max_tokens)
+    # 호출마다 읽기 타임아웃을 걸어 Bedrock 이 응답하지 않아도 요청이 무한정 걸리지 않게 한다
+    boto_config = BotoConfig(read_timeout=config.BEDROCK_READ_TIMEOUT_S, connect_timeout=10,
+                             retries={"max_attempts": 2, "mode": "standard"})
+    return ChatBedrockConverse(model=config.MODEL, region_name=config.REGION, temperature=0, max_tokens=max_tokens,
+                               config=boto_config)
+
+
+ERROR_MESSAGE = "죄송합니다. 일시적인 오류로 답변을 만들지 못했습니다. 잠시 후 다시 시도해 주세요."
+BIRTH_REQUEST_RE = re.compile(r"(생년월일|출생\s*정보|음력\s*생년월일|양력\s*생년월일)[^.]{0,20}(알려|필요|입력|주시면|주세요)")
 
 
 def get_text(message) -> str:
@@ -86,10 +97,9 @@ SAJU_PROMPT = f"""너는 사주 해석 전문가(saju_agent)다. 용신·오행�
 날짜 구간이 절기 경계에 걸치면 경계 전후를 나누어 설명한다.
 {COMMON_RULES}"""
 
-TRAVEL_PROMPT = f"""너는 여행 추천 전문가(travel_agent)다. 월별 여행지는 반드시 recommend_travel 로 고른다.
-- 특정 달: 사주 요약에서 그 양력 달의 15일이 속한 절기 월 번호만 넘긴다 ('내년 5월'이면 기준일 다음 해 5월).
-- 계절: 봄=壬寅·癸卯·甲辰, 여름=丙午·丁未·戊申, 가을=己酉·戊戌(기준일 기준 범위 안), 겨울=己亥·庚子·辛丑 의 번호.
-- 1년 전체: 1~12.
+TRAVEL_PROMPT = f"""너는 여행 추천 전문가(travel_agent)다. 월별 여행지는 반드시 recommend_travel 로 고르고, 필요한 달을 모두 담아 한 번만 호출한다.
+- 메시지의 [대상 절기 월 번호]를 month_indices 로 그대로 쓴다. 없으면 사주 요약의 '양력 N월' 열에서 질문이 가리키는 달의 번호를 고른다.
+- 계절은 명리 기준이다: 봄=寅卯辰월, 여름=巳午未월, 가을=申酉戌월, 겨울=亥子丑월.
 - 국내/해외 요청에 맞춰 scope 를 고른다(언급 없으면 both).
 각 달의 pick 을 추천하고 이유는 점수 근거(용신 오행·방위·추천 월)로 설명한다. 동행자가 있어도 사용자 본인 사주 기준이라고 밝힌다.
 {COMMON_RULES}"""
@@ -133,6 +143,11 @@ COMPOSE_PROMPT = """당신은 사주 라이프 플래너의 최종 답변 작성
 13. 계획 평가 claim 은 '좋음/보통/주의' 등급 이름과 해당 절기 월 기간을 반드시 함께 쓴다.
 14. 여러 달을 추천하는 요청이면 보고에 나온 달마다 국내·해외 추천을 빠짐없이 옮긴다.
 15. 용신 일치 오행은 사주 요약 표의 '용신 일치' 값 그대로 쓴다.
+16. 근거 목록에 mcp:saju 가 있으면 사주 요약이 있는 것이다. 이때 생년월일을 다시 묻지 않는다.
+17. 용신·오행·십성의 의미를 묻는 질문에는 rule 문서를 근거로 개념, 사용자 사주에서의 의미, 생활 활용(방위·환경·계절) 예시를 각각 한 문장 이상 쓴다.
+18. doc_id 는 doc_ids 필드에만 넣고 text 에는 [doc_id] 같은 태그를 쓰지 않는다.
+    대신 해석 근거는 "명리 해설 「용신이란」에 따르면"처럼 문서 제목으로 자연스럽게 밝힌다.
+{travel_note}
 {feedback}
 [사용자 질문]
 {question}
@@ -233,9 +248,16 @@ class SajuPlannerApp:
         st = self._state()
         chart_block = tools.chart_text(st.chart) if st.chart else "(출생 정보 없음: 사주 요약이 없습니다)"
         need = required_agents(s["masked"])
+        indices = tools.target_month_indices(s["masked"])
         content = (f"[기준일] {config.REFERENCE_DATE}\n[사주 요약 · doc_id=mcp:saju]\n{chart_block}\n\n"
                    f"[사용자 질문]\n{s['masked']}\n\n[필수 호출 에이전트] {', '.join(need)}")
-        st.add_step("route", s["masked"], need, type="route", name="intent_router")
+        if indices:
+            content += f"\n[대상 절기 월 번호] {indices}"
+        if "saju_agent" in need:
+            # 해석 근거가 필요한 질문은 규칙 문서를 먼저 검색해 에이전트에게 함께 넘긴다 (RAG)
+            rules = tools.pre_retrieve_rules(s["masked"])
+            content += "\n\n[관련 해석 규칙]\n" + "\n".join(f"- [{r['doc_id']}] {r['text']}" for r in rules)
+        st.add_step("route", s["masked"], {"agents": need, "month_indices": indices}, type="route", name="intent_router")
         callbacks = {"callbacks": [TraceCallback(st)], "recursion_limit": 40}
         result = await self.supervisor.ainvoke({"messages": [HumanMessage(content=content)]}, callbacks)
         reports, done = [], set()
@@ -252,7 +274,39 @@ class SajuPlannerApp:
             last = next((m for m in reversed(sub["messages"]) if isinstance(m, AIMessage) and get_text(m).strip()), None)
             if last:
                 reports.append(f"## {name}\n{get_text(last)}")
+        # 여행 추천이 필요한데 월별 추천 도구가 불리지 않았으면 규칙대로 직접 계산한다
+        if "travel_agent" in need and st.chart and not st.travel_picks:
+            scope = "domestic" if "국내" in s["masked"] and "해외" not in s["masked"] else \
+                "overseas" if "해외" in s["masked"] and "국내" not in s["masked"] else "both"
+            await tools.recommend_travel.ainvoke({"month_indices": indices or list(range(1, 13)), "scope": scope})
+            st.add_step("agent:travel_agent", "fallback", "recommend_travel 직접 호출", type="agent", name="travel_agent")
         return {"reports": "\n\n".join(reports) or "(보고 없음)"}
+
+    def _travel_claims(self) -> list[Claim]:
+        """recommend_travel 결과로 월별 여행 추천 문장을 만든다 (LLM 없이, 근거 doc_id 포함)."""
+        st = self._state()
+        if not st.chart or not st.travel_picks:
+            return []
+        ys = set(st.chart["yongsin_elements"])
+        months = {m["index"]: m for m in st.chart["months"]}
+        claims = []
+        for idx in sorted(st.travel_picks):
+            row, m = st.travel_picks[idx], months[idx]
+            parts, ids = [], ["mcp:saju"]
+            for scope, label in (("domestic", "국내"), ("overseas", "해외")):
+                pick = (row.get(scope) or {}).get("pick")
+                if not pick:
+                    continue
+                match = "·".join(e for e in pick["elements"] if e in ys) or pick["elements"][0]
+                parts.append(f"{label} {pick['name']}({pick['direction']}쪽, {match} 기운)")
+                ids.append(pick["id"])
+            if not parts:
+                continue
+            note = " 일지와 충하는 달이라 일정에 여유를 두세요." if m["clash_with_day_branch"] else ""
+            claims.append(Claim(section="여행 추천",
+                                text=f"{m['month_ganzhi']}월({m['start_date']} ~ {m['end_date']}): {', '.join(parts)}을(를) 추천합니다.{note}",
+                                doc_ids=ids))
+        return claims
 
     async def compose(self, s: QueryState) -> QueryState:
         st = self._state()
@@ -260,13 +314,18 @@ class SajuPlannerApp:
         feedback = ""
         if s.get("violations"):
             feedback = "\n[이전 답변의 위반 사항 - 반드시 고칠 것]\n" + "\n".join(f"- {v}" for v in s["violations"]) + "\n"
+        travel_note = ("19. 월별 여행지 목록(달마다 국내·해외 추천)은 시스템이 '여행 추천' 섹션 끝에 표로 붙인다. "
+                       "너는 여행 추천 섹션에 전체 경향을 요약하는 문장 1~2개만 쓰고, 달마다 장소를 나열하지 않는다."
+                       if st.travel_picks else "")
         prompt = COMPOSE_PROMPT.format(feedback=feedback, question=s["masked"], contexts=ctx or "(없음)",
-                                       reports=s.get("reports", ""))
+                                       reports=s.get("reports", ""), travel_note=travel_note)
         answer = await self.composer.ainvoke(prompt, {"callbacks": [TraceCallback(st)]})
         return {"answer": answer, "attempts": s.get("attempts", 0) + 1}
 
     def _claim_violations(self, c: Claim, known: set[str]) -> list[str]:
         out = [f"근거 목록에 없는 doc_id {d}" for d in c.doc_ids if d not in known]
+        if "mcp:saju" in known and BIRTH_REQUEST_RE.search(c.text):
+            out.append("사주 요약이 있는데 생년월일을 다시 요청함")
         if (GANZHI_CHARS & set(c.text) or DATE_RE.search(c.text)) and "mcp:saju" in known and "mcp:saju" not in c.doc_ids:
             out.append("간지·기간을 말하는데 mcp:saju 인용 없음")
         place = tools.lookup_place(c.text)
@@ -298,6 +357,9 @@ class SajuPlannerApp:
         fixed = self._repair_month_ranges(s["answer"])
         if fixed:
             st.add_step("guard:output", "month_range_repair", f"fixed={fixed}", type="guard", name="month_range_repair")
+        stripped = strip_doc_tags(s["answer"])
+        if stripped:
+            st.add_step("guard:output", "doc_tag_strip", f"stripped={stripped}", type="guard", name="doc_tag_strip")
         known = set(st.contexts)
         bad = {}
         for i, c in enumerate(s["answer"].claims):
@@ -314,14 +376,55 @@ class SajuPlannerApp:
             return {"answer": StructuredAnswer(claims=kept), "violations": []}
         return {"violations": violations}
 
+    def _note_claims(self) -> list[Claim]:
+        """윤달·시각 미상·계절 정의처럼 사주 요약에서 바로 나오는 안내 문장 (LLM 없이)."""
+        st = self._state()
+        chart, notes = st.chart, []
+        if not chart:
+            return notes
+        if "윤달" in chart["calendar_input"]:
+            notes.append(Claim(section="사주 요약", text="음력 윤달 생일을 반영해(평달과 다른 원국으로) 사주를 계산했습니다.",
+                               doc_ids=["mcp:saju"]))
+        elif chart["calendar_input"].startswith("lunar"):
+            notes.append(Claim(section="사주 요약", text="음력 생일(평달)을 양력으로 환산해 사주를 계산했습니다.",
+                               doc_ids=["mcp:saju"]))
+        if not chart["hour_known"]:
+            notes.append(Claim(section="사주 요약", text="출생 시각을 알 수 없어 시주를 제외하고 연·월·일주로 해석했습니다. "
+                                                     "용신 해석의 신뢰도가 다소 낮을 수 있습니다.", doc_ids=["mcp:saju"]))
+        if st.season:
+            ms = [m for m in chart["months"] if m["month_ganzhi"][1] in tools.SEASON_BRANCHES[st.season]]
+            span = ", ".join(f"{m['month_ganzhi']}월({m['start_date']} ~ {m['end_date']})" for m in ms)
+            notes.append(Claim(section="여행 추천",
+                               text=f"명리에서 {st.season}은 {'·'.join(tools.SEASON_BRANCHES[st.season])}월로 보며, "
+                                    f"이번 조회 범위에서는 {span}입니다.", doc_ids=["mcp:saju"]))
+        return notes
+
     async def finalize(self, s: QueryState) -> QueryState:
         extra = [guards.REFUSAL_MESSAGES[c] for c in s["decision"].partial_categories] if s.get("decision") else []
-        return {"final": render_answer(s["answer"], extra=extra, disclaimer=guards.DISCLAIMER)}
+        claims = list(s["answer"].claims)
+        travel = self._travel_claims()
+        if travel:
+            # 월별 표는 코드가 만들므로 작성자가 쓴 월별·장소 문장은 빼고 요약 문장만 남긴다 (중복·오표기 방지)
+            claims = [c for c in claims if not (c.section == "여행 추천" and
+                                                (MONTH_RANGE_RE.search(c.text) or tools.lookup_place(c.text, "travel")))]
+        notes = self._note_claims()
+        for n in notes:
+            pos = max((i for i, c in enumerate(claims) if c.section == n.section), default=-1)
+            claims.insert(pos + 1 if pos >= 0 else (0 if n.section == "사주 요약" else len(claims)), n)
+        if travel:
+            # 작성자가 쓴 여행 요약 문장 바로 뒤(없으면 맨 끝)에 월별 여행 표를 붙인다
+            last_travel = max((i for i, c in enumerate(claims) if c.section == "여행 추천"), default=len(claims) - 1)
+            claims[last_travel + 1:last_travel + 1] = travel
+        return {"final": render_answer(StructuredAnswer(claims=claims), extra=extra, disclaimer=guards.DISCLAIMER)}
 
     # ---- 진입점 ----
     async def run_query(self, question: str) -> dict:
         st = start_request()
-        out = await self.graph.ainvoke({"question": question}, {"recursion_limit": 60})
+        try:
+            out = await self.graph.ainvoke({"question": question}, {"recursion_limit": 60})
+        except (asyncio.TimeoutError, TimeoutError, ReadTimeoutError) as e:
+            st.add_step("error", type(e).__name__, ERROR_MESSAGE, type="error", name="timeout")
+            out = {"response": ERROR_MESSAGE}
         answer = out.get("response") or out.get("final") or ""
         contexts = [] if out.get("response") else st.context_list()
         return {"answer": answer, "contexts": contexts, "trace": st.trace,

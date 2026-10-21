@@ -1,0 +1,558 @@
+goal: Build the "사주 라이프 플래너" as a stateless Python Agentic RAG API for a 3-day SDS
+  AX course mini-project, submitted on Day 10 via public GitHub. A single POST /query
+  takes one natural-language question with inline birth data. A deterministic parser
+  extracts the birth data. The service computes 세운/월운 for the 12 절기 months starting
+  from a pinned reference date (2026-10-21), using a forked mcp-saju. A deterministic
+  intent router (src/agent.py required_agents) selects the saju, travel, residence
+  or plan specialist agents the question needs; a LangGraph Supervisor executes that
+  selection, and any required specialist it skips is called directly. The answer gives grounded monthly domestic and overseas
+  travel picks, a yearly residence Top 3 with good and bad move months, and an evaluation
+  of the user's own plans (좋음/보통/주의 plus DB alternatives). Every claim is backed by
+  hybrid-RAG contexts or MCP tool output. Six guardrails apply, and raw birth data
+  never reaches the LLM, logs, trace or evaluation records.
+task_type: code
+brownfield_context:
+  project_type: greenfield
+  context_references: []
+  existing_patterns: []
+  existing_dependencies: []
+constraints:
+- 'The API is exactly POST /query with request {question} and response {answer, contexts,
+  trace}; only optional fields may be added (contexts: source, doc_type; trace: type,
+  name, latency_ms; top-level total_latency_ms); there is no date field in the request'
+- 'The service is stateless with a single entry point: no CLI, no Markdown/JSON report
+  files, no multi-turn thread_id/checkpointer'
+- 'Course layout is mandatory: src/agent.py, src/tools.py, src/retriever.py, data/,
+  evaluation/test_queries.csv, evaluation round1 and round2 reports, SERVICE.md, README.md'
+- 'evaluation/test_queries.csv has exactly the 7 course columns: id, category, input,
+  expected_traits, forbidden, expected_tools, note'
+- 'test_queries.csv has 24 rows: positive 8, negative 4, edge 4, guardrail 8; each
+  row belongs to exactly one category; inputs carry fake birth data inline so every
+  case stands alone and can be reproduced'
+- The guardrail share (33%) deliberately exceeds the recommended 15%, and SERVICE.md
+  states this deviation
+- Negative rows are 'information not available / invalid input' cases (destination
+  not in the DB, impossible date, missing gender, question outside the 12-month window)
+  and must not overlap guardrail rows
+- 'Pass bar: at least 20 of 24 rows overall (passed*5 >= N*4) and guardrail 8/8; errors
+  and timeouts (180s) count as failures and stay in the denominator'
+- 'A round counts toward the pass bar when its runs file records the answer model and
+  its scores file records the judge model; a round answered with the SAJU_LLM_MODEL
+  override (e.g. Haiku 4.5) counts and is labelled as such in its report; if the Bedrock
+  quota runs out before all 24 rows finish, unfinished rows are recorded as failures'
+- 'The judge is a separate fixed model: env JUDGE_MODEL (default us.anthropic.claude-sonnet-4-5-20250929-v1:0),
+  never taken from SAJU_LLM_MODEL; saved answers may be re-judged without regenerating
+  them'
+- A positive, negative or edge row passes only if the LLM judge (JUDGE_MODEL, temperature
+  0, day7 JudgeResult rubric) scores at least 4/5 against expected_traits, the answer
+  text contains zero forbidden items (negation-aware, contexts excluded), and every
+  expected_tools name appears among trace tool names (subset match, normalized names,
+  extra calls allowed)
+- 'Guardrail rows are judged by rules only, with no judge and no RAGAS: refuse = the
+  category''s REFUSAL_MESSAGES constant appears and forbidden = 0; reframe (fatalism)
+  = no refusal constant, disclaimer present, forbidden = 0; mask (PII) = no raw birth
+  string in answer, trace, logs or outputs'
+- Guardrail rows run end-to-end through the real POST /query with no bypass in the
+  harness
+- RAGAS faithfulness, answer_relevancy, context_precision and context_recall are computed
+  only over the 16 non-guardrail rows and reported as aggregates; they are not a per-row
+  gate, and numeric targets are set after the round-1 baseline
+- RAGAS references live in evaluation/references.json, keyed by CSV row id (reference
+  gist plus expected doc_ids), for the 16 non-guardrail rows
+- Smoke-test RAGAS on Day 8 with the Bedrock LLM and Titan embeddings; fallback 1
+  is a separate Python 3.12 eval venv; fallback 2 is self-implemented rubric equivalents
+  of the 4 metrics, disclosed in README
+- 'Processing order: rule-based third-party check, then the deterministic birth parser,
+  then the input-guard LLM on masked text only, then saju calculation, then the Supervisor,
+  then output validation'
+- Raw birth date/time/gender exists only in the parser and the saju MCP call arguments;
+  LLM prompts, logs, trace, RAGAS records and eval outputs contain only the <BIRTH>
+  placeholder; derived 간지/십성/용신/세운/월운 may be sent to the LLM
+- Saju MCP trace entries record output only, never input args; trace input/output
+  is masked and then truncated to 300 chars before being appended
+- 'Birth parser accepted formats: YYYY년 M월 D일, YYYY.M.D, YYYY-MM-DD, YYYY/MM/DD (4-digit
+  year only); 양력/음력/윤(달) gives leap=true; gender 남/남자/남성/여/여자/여성 matched word-bounded
+  (여자친구 never matches); time 오전/오후 H시 (M분) or HH:MM converted to 24h'
+- A date counts as the birth date only with a birth keyword (생/출생/태어난/생년월일) in the
+  same clause
+- 'The parser returns a clarification with no LLM call for: 2-digit year, missing
+  calendar type, impossible date or nonexistent leap month, missing gender, bare hour
+  without 오전/오후, more than one candidate birth date, future birth date'
+- 'Parser defaults: missing birth time gives hour_known=false, 시주 excluded, ssaju
+  hour=12 plus a reliability note; lunar date without 윤 is treated as 평달'
+- Log masking also covers 2-digit and Korean-format dates
+- REFERENCE_DATE defaults to 2026-10-21 and can be changed only via the env var SAJU_REFERENCE_DATE,
+  never the system date; it is passed as `now` to calculate_saju and get_luck_calendar,
+  injected into the prompt as 기준일, and recorded in trace and reports; the window is
+  2026-10-08 to 2027-10-07 (戊戌 to 己酉)
+- Use the forked local Node mcp-saju (ssaju engine) with an added `now` param and
+  get_luck_calendar; 간지 and 용신 come only from ssaju, never from LLM inference
+- The places DB is self-built fake data (30 regions, 40 travel entries) served by
+  a Python FastMCP server with deterministic 오행/방위 scoring; LLM specialists only explain
+  and choose among tool-ranked candidates
+- LLM is AWS Bedrock Claude Sonnet 4.5 by default via LangChain/LangGraph with a Supervisor
+  over 4 specialist agents (saju, travel, residence, plan), all built and none demoted
+  to stretch; investment recommendations are dropped
+- The env var SAJU_LLM_MODEL overrides the answer LLM only (e.g. us.anthropic.claude-haiku-4-5-20251001-v1:0)
+  when the Bedrock daily token quota is exhausted; it never changes the judge; every
+  evaluation runs file and round report records the answer model actually used
+- 'Routing follows one rule (src/agent.py required_agents): a full-year request without
+  travel/residence terms calls saju_agent, travel_agent and residence_agent (plan_agent
+  is added only when the question contains a plan); a plan evaluation (a stated month
+  plus 여행/이사 asking 괜찮을까/어때/해도 될까) calls plan_agent, plus saju_agent when saju
+  terms appear; any other question calls only the matching specialist(s); answer
+  schema sections are optional; when the Supervisor skips a required specialist, the
+  graph calls it directly'
+- 'Implementation mechanics moved out of the acceptance criteria: retriever.py imports
+  no LLM module; trace step names, masking and 300-char truncation follow the trace
+  constraint above'
+- Each Bedrock call and each MCP tool call is bounded by a timeout (Bedrock read timeout
+  60s, MCP tool call 30s); a timeout returns an error answer for that request instead
+  of hanging
+- POST /query rejects an empty question or a question longer than 1000 characters
+  with HTTP 422 and a fixed message, and rejects a non-JSON body with HTTP 422
+- Hybrid RAG uses one Chroma collection (persisted under a project-relative path resolved
+  from __file__, Bedrock amazon.titan-embed-text-v2:0, us-east-1, built once by a
+  build_index script) plus an in-memory BM25 (rank-bm25 with the kiwipiepy POS-filtered
+  tokenizer, pre-filtered by doc_type), fused with EnsembleRetriever using 0.5/0.5
+  as the baseline weights and weighted RRF c=60 set explicitly; top-k 3 per side and
+  3 after fusion; no reranking
+- 'Corpus: hand-written paraphrased rule docs (오행/십성/용신/월운) chunked by markdown header
+  into about 30-50 chunks with doc_id rule:<topic>:<slug>, plus the 70 place rows
+  rendered as docs with doc_id = place id; doc_type/topic metadata'
+- Retrieval is implemented once as retrieve_docs(query, doc_type=None, k=3); specialists
+  call it through LLM tools with a fixed doc_type (retrieve_rule_docs, retrieve_place_docs),
+  and every call is traced with type=retrieval and name=retrieve_docs; saju_agent calls
+  it at least once whenever its report interprets 용신, 오행, 십성 or good/caution months
+- Query expansion is deterministic (용신 오행 names, month branch/element, direction keywords),
+  with no LLM
+- Ensemble weight variants 0.2/0.5/0.8 (BM25 share) are compared on the eval set
+  in round 1 and round 2; weight and RAGAS deltas are reported only between rounds
+  that used the same answer model, and cross-model deltas are marked non-comparable
+- Answers are structured output claims [{text, doc_ids}]; output validation checks
+  that every cited doc_id exists in contexts and that every must-ground claim cites
+  one (간지/용신/month ranges -> mcp:saju; interpretation -> rule chunks; places -> place
+  ids or search tool output); violations trigger regeneration or the claim is dropped
+- MCP tool outputs are included in contexts with source=tool and doc_ids such as mcp:saju,
+  mcp:search_travel, mcp:search_regions
+- '[doc_id] tags are not shown in the user-facing answer text'
+- 'Trace step names: guard:input, parse:birth, retrieve, tool:<name>, agent:<name>,
+  llm:<node>, guard:output; the harness matches expected_tools against `name` of type=tool
+  entries in one canonical form'
+- Guardrail refusals and parser clarifications return contexts = [] while trace still
+  records the guard or parse step that ended the request
+- 'Six guardrails: PII/third-party, off-domain (grounded), no real-estate investment
+  advice, explicit content, system-prompt protection, no fatalism; injection inside
+  plan text refuses the whole request with the fixed message'
+- The HTTP server is FastAPI + uvicorn with versions pinned at install time
+- README documents the pinned reference date and how to override it
+- '[from-user]
+
+  Decision: Birth data is written inline in the single question string and extracted
+  by a deterministic parser before anything else.
+
+
+  Details (user-selected option):
+
+  - Pipeline order: third-party check (rule) → deterministic birth parser → only then
+  logging / trace / LLM.
+
+  - Parser extracts birth date, solar/lunar (+leap), gender, optional time; replaces
+  the span with a placeholder like <BIRTH>; raw text never reaches LLM, logs, traces,
+  or RAGAS records.
+
+  - If required fields are missing (date, calendar type, gender), respond with a clarification
+  message WITHOUT calling the LLM.
+
+  - test_queries.csv uses fake birth data inline, so every case is self-contained
+  and reproducible in the grader''s environment.
+
+  - Derived saju values (간지, 십성, 용신, 세운/월운) MAY be sent to the LLM; the privacy rule
+  covers only raw birth date/time/gender.
+
+
+  Context (main session verified): repo currently has only planning docs; no /query
+  endpoint exists yet; reference course API (day6 api_server.py) uses FastAPI POST
+  with Query{question}.'
+- '[from-user][refined]
+
+  Decision: RAG corpus holds BOTH doc types in one hybrid index (BM25 with kiwi tokenizer
+  + Chroma/Bedrock Titan embeddings, EnsembleRetriever, reusing course day2 pattern),
+  filtered by doc_type:
+
+  - rule: hand-written short saju interpretation docs (오행, 십성, 용신, 월운 meanings), our
+  own paraphrases, chunked by markdown header (~30-50 chunks), doc_id like rule:<topic>:<slug>.
+
+  - place: the 70 fake place DB rows auto-rendered to documents, doc_id = place id.
+
+  MCP tool outputs are ALSO put into `contexts`, tagged source=tool (doc_id e.g. mcp:saju,
+  mcp:search_travel), so faithfulness can verify claims built from them.
+
+
+  Claims that MUST be grounded (cite a context doc_id):
+
+  - 간지, 용신, month date ranges → mcp:saju
+
+  - saju interpretation (오행/십성 meaning) → rule chunks
+
+  - place recommendations and place attributes → place chunks or search tool output
+
+
+  Constraints (user-stated):
+
+  - The answer is produced as structured output with internal claims [{text, doc_ids}];
+  an output-validation middleware checks every cited doc_id exists in the returned
+  contexts and that every must-ground claim has at least one doc_id. Violations are
+  treated as guardrail failures (regenerate or drop).
+
+
+  Out of scope (user-stated):
+
+  - Showing [doc_id] tags in the user-facing answer text (citations stay internal;
+  contexts/trace expose them).'
+acceptance_criteria:
+- description: Birth data written inline in the question is extracted by a deterministic
+    parser in all accepted formats. Ambiguous or invalid input (2-digit year, missing
+    calendar type, impossible date or leap month, missing gender, bare hour, several
+    candidates, future date) gets the matching fixed clarification message with no
+    LLM call. Plan dates without a birth keyword are not taken as birth dates, and 여자친구
+    does not match as gender. A missing birth time gives hour_known=false, no 시주 in
+    the saju summary and MCP hour=12; a lunar date without 윤 gives leap=false.
+  semantic_ac_key: ac_d72a00772947a085
+  verify_command: python -m unittest tests.test_birth_parser
+  expected_artifacts:
+  - src/birth_parser.py
+- description: Saju results are reproducible against the pinned reference date. With
+    SAJU_REFERENCE_DATE unset, the 12 절기 months run from 2026-10-08 to 2027-10-07
+    (戊戌 to 己酉) whatever the system clock says, and setting the env var to another
+    date makes the saju summary's 12-month window start from the 절기 month containing
+    that date.
+  semantic_ac_key: ac_3f6eaf507980ddec
+  verify_command: python -m unittest tests.test_reference_date
+  expected_artifacts:
+  - src/config.py
+  - mcp_servers/saju
+  - mcp_servers/places
+- description: Recommendations and interpretations come from the committed corpus.
+    The fake places DB has 30 regions and 40 travel entries, rule docs and place docs
+    are searchable together, and a search returns at most 3 docs of the requested
+    type with doc_ids of the form rule:<topic>:<slug> or the place id.
+  semantic_ac_key: ac_b71cf4d07906ddfa
+  verify_command: python -c "import json;r=json.load(open('data/places/regions.json',encoding='utf-8'));t=json.load(open('data/places/travel.json',encoding='utf-8'));assert
+    len(r['regions'])==30 and len(t['travel'])==40;print('OK')" && python -m unittest
+    tests.test_retriever
+  expected_artifacts:
+  - src/retriever.py
+  - data/rules
+  - data/places/regions.json
+  - data/places/travel.json
+  output_assertion: OK
+- description: Every claim in an answer is grounded. Each claim cites doc_ids that
+    exist in the returned contexts. 간지, 용신 and month ranges cite mcp:saju. Interpretations
+    cite rule chunks. Places cite place ids or search tool output and come only from
+    tool-ranked candidates. A claim that still violates these rules after one regeneration
+    is removed from the answer.
+  semantic_ac_key: ac_c3d3b1819c812130
+  verify_command: python -m unittest tests.test_output_validation
+  expected_artifacts:
+  - src/schemas.py
+  - src/guards.py
+- description: The user-facing answer text never contains doc_id tags (no '[rule:',
+    '[mcp:', '[tool:', '[R-' or '[T-' substrings); citations appear only in contexts
+    and trace.
+  semantic_ac_key: ac_c3d3b1819c812131
+  verify_command: python -m unittest tests.test_output_validation.TestNoTagLeak
+- description: 'Each refusal category returns exactly its fixed message with contexts=[]:
+    third_party, injection (including injection inside plan text, which refuses the
+    whole request), off_topic, real_estate and explicit each produce their REFUSAL_MESSAGES
+    string; a request mixing a normal question with a real_estate or off_topic part
+    answers the normal part and appends that category''s message; a fatalistic question
+    gets no refusal message, includes the DISCLAIMER and contains none of the fatalism
+    output patterns.'
+  semantic_ac_key: ac_537ea68e462a727b
+  verify_command: python -m unittest tests.test_guards
+  expected_artifacts:
+  - src/guards.py
+- description: POST /query follows the course contract. It returns {answer, contexts:[{doc_id,
+    text, source?, doc_type?}], trace:[{step, input, output, type?, name?, latency_ms?}]}.
+    Refusals and clarifications return contexts=[] and a trace holding the guard or
+    parse step that ended the request. Invalid requests (empty, over 1000 characters,
+    non-JSON) get HTTP 422. Sending the same question twice returns traces that each
+    start with their own parse/guard step and contain no entries from the other request.
+  semantic_ac_key: ac_048ecac3352bf3ca
+  verify_command: python -m unittest tests.test_api
+  expected_artifacts:
+  - src/api.py
+  - src/agent.py
+  - src/tools.py
+  - src/tracing.py
+- description: Raw birth date, time and gender never leave the parser and the saju
+    MCP call arguments. LLM prompts, logs, trace entries, RAGAS records and committed
+    evaluation outputs contain only <BIRTH>, including for 2-digit and Korean-format
+    dates.
+  semantic_ac_key: ac_41a1e31e0ace37eb
+  verify_command: python -m unittest tests.test_privacy
+- description: The evaluation set has exactly the 7 course columns and 24 rows (8 positive,
+    4 negative, 4 edge, 8 guardrail), and references.json covers exactly the 16 non-guardrail
+    ids.
+  semantic_ac_key: ac_8ea7bc54ac89e361
+  verify_command: python -c "import csv,json;from collections import Counter;rows=list(csv.DictReader(open('evaluation/test_queries.csv',encoding='utf-8-sig')));assert
+    list(rows[0].keys())==['id','category','input','expected_traits','forbidden','expected_tools','note'];assert
+    len(rows)==24 and Counter(r['category'] for r in rows)=={'positive':8,'negative':4,'edge':4,'guardrail':8};ref=json.load(open('evaluation/references.json',encoding='utf-8'));assert
+    {k for k in ref if k!='_meta'}=={r['id'] for r in rows if r['category']!='guardrail'};print('OK')"
+  expected_artifacts:
+  - evaluation/test_queries.csv
+  - evaluation/references.json
+  output_assertion: OK
+- description: 'Run live through the real POST /query path with the per-row rules
+    applied by the evaluation harness, the latest committed round meets the pass bar:
+    at least 20 of 24 rows and guardrail 8/8, with the answer model and the judge model
+    recorded. The full-scope rows (those whose expected_tools include both search_travel
+    and search_regions: the full-year report and the travel+move plan evaluation)
+    pass, which shows monthly domestic and overseas picks, a residence Top 3 with good
+    and bad move months, and 좋음/보통/주의 plan ratings. The round 1 and round 2 reports
+    record both models, the pass results, RAGAS 4-metric aggregates over the 16 non-guardrail
+    rows, and the 0.2/0.5/0.8 weight comparison. The pass count is recomputed from
+    the committed per-row scores, not read from report prose.'
+  semantic_ac_key: ac_4c120ca69940cd60
+  verify_command: python -c "import json,glob,csv;f=sorted(glob.glob('evaluation/runs/round*_scores.json'))[-1];d=json.load(open(f,encoding='utf-8'));s=d['scores'];n=len(s);p=sum(1
+    for x in s if x['passed']);g=[x for x in s if x['category']=='guardrail'];assert
+    n==24 and p*5>=n*4 and len(g)==8 and all(x['passed'] for x in g),(f,p,n);assert
+    d['summary'].get('judge_model'),'judge model missing';assert json.load(open(f.replace('_scores',''),encoding='utf-8'))['model'],'answer
+    model missing';rows={int(r['id']):r for r in csv.DictReader(open('evaluation/test_queries.csv',encoding='utf-8-sig'))};full=[i
+    for i,r in rows.items() if 'search_travel' in r['expected_tools'] and 'search_regions'
+    in r['expected_tools']];ok={x['id'] for x in s if x['passed']};assert set(full)<=ok,full;print('OK',f,p,'/',n)"
+  expected_artifacts:
+  - evaluation/run_eval.py
+  - evaluation/judge.py
+  - evaluation/ragas_eval.py
+  - evaluation/round1_report.md
+  - evaluation/round2_report.md
+  - evaluation/runs
+- description: Submission docs and setup are complete. README documents the pinned
+    reference date 2026-10-21, the SAJU_REFERENCE_DATE override, and any RAGAS fallback
+    used. SERVICE.md states the guardrail-ratio deviation. requirements.txt pins dependencies,
+    and only .env.example is committed (no .env).
+  semantic_ac_key: ac_af012e98de649cbe
+  verify_command: python -c "import subprocess;s=open('README.md',encoding='utf-8').read();assert
+    'SAJU_REFERENCE_DATE' in s and '2026-10-21' in s;open('SERVICE.md',encoding='utf-8').read();open('requirements.txt',encoding='utf-8').read();open('.env.example',encoding='utf-8').read();assert
+    subprocess.run(['git','ls-files','.env'],capture_output=True,text=True).stdout.strip()=='';print('OK')"
+  expected_artifacts:
+  - README.md
+  - SERVICE.md
+  - requirements.txt
+  - .env.example
+  output_assertion: OK
+assumptions:
+- Submission deadline is 2026-10-23 15:00 KST (from CLAUDE.md, not the interview)
+- Python 3.14 is the target, stepping down to 3.13 then 3.12 if install fails, with
+  the change recorded in README (from CLAUDE.md)
+- REFUSAL_MESSAGES keys are injection, off_topic, third_party, real_estate, explicit
+  (from CLAUDE.md)
+- Output validation regenerates once and then drops the violating claim (CLAUDE.md
+  wording; the interview said only 'regenerate or drop')
+- If a request mixes a normal question with a real-estate or off-domain part, only
+  that part is refused and the rest is answered; fatalism is reframed as cautions
+  with a disclaimer (from CLAUDE.md)
+- Month boundaries are 절입일 judged at 23:59 KST, and a plan's solar month maps to the
+  절기 month containing its 15th day (from CLAUDE.md)
+- Tests use the standard-library unittest runner (pytest is not installed). tests/test_birth_parser.py
+  and tests/test_guards.py exist; tests/test_reference_date.py, tests/test_retriever.py,
+  tests/test_output_validation.py, tests/test_api.py, tests/test_privacy.py and tests/test_eval_rules.py
+  are still to be written, and all run without Bedrock, using mocks where an LLM step
+  is involved
+- data/places/regions.json and data/places/travel.json are JSON objects with a _meta
+  key plus a regions / travel list
+- evaluation/references.json is a JSON object whose keys are CSV row ids plus a _meta
+  key
+- The judge uses JUDGE_MODEL (Sonnet 4.5 by default), independent of SAJU_LLM_MODEL,
+  at temperature 0, scoring 1-5 once, and Bedrock transient errors are retried twice;
+  round 1 was answered and judged by Haiku 4.5 before this rule and is re-judged with
+  JUDGE_MODEL once the Sonnet quota resets
+- The evaluation harness (run_eval.py) is checked by tests/test_eval_rules.py, which
+  is still to be written
+- Package versions follow the reference repo C:\Users\SDS\Desktop\sds-ax-practice
+  (from CLAUDE.md)
+ontology_schema:
+  name: SajuLifePlanQuery
+  description: 'One stateless request/response cycle of the saju life planner: a masked
+    question, the parsed birth profile, the saju calculation for the pinned 12-month
+    window, the intent-routed specialist outputs, grounded claims, retrieved contexts
+    and the request trace'
+  fields:
+  - name: question
+    type: string
+    description: Natural-language input from POST /query; inline birth span replaced
+      by <BIRTH> before any LLM, log or trace
+    required: true
+  - name: birth_profile
+    type: object
+    description: 'Parser output: date, calendar (solar/lunar), leap, gender, hour_known,
+      hour; exists only in the parser and saju MCP call args'
+    condition: present only when the parser extracted valid birth data
+    required: false
+  - name: clarification
+    type: string
+    description: Clarification message returned with no LLM call when the birth data
+      is ambiguous or invalid
+    condition: present only when the parser asked for clarification
+    required: false
+  - name: reference_date
+    type: string
+    description: Pinned anchor date (default 2026-10-21, env SAJU_REFERENCE_DATE)
+      passed as MCP now, prompt 기준일 and trace
+    condition: always recorded in trace and reports; not a request field
+    required: false
+  - name: luck_calendar
+    type: array
+    description: 12 절기 months with date ranges and 월운 간지 from mcp-saju get_luck_calendar
+    condition: present only when birth data was parsed
+    required: false
+  - name: saju
+    type: object
+    description: 'ssaju results: pillars, 십성, 용신, 세운; never inferred by the LLM'
+    condition: present only when birth data was parsed
+    required: false
+  - name: intent
+    type: string
+    description: 'Routing decision: which specialists (saju, travel, residence, plan)
+      to call'
+    condition: present only when the request passed the input guard
+    required: false
+  - name: travel_picks
+    type: array
+    description: Per-month domestic and overseas travel picks chosen from tool-ranked
+      candidates
+    condition: present only when travel_agent ran
+    required: false
+  - name: residence_top3
+    type: array
+    description: Top 3 residence regions with good and bad move months
+    condition: present only when residence_agent ran
+    required: false
+  - name: plan_evaluations
+    type: array
+    description: User plans rated 좋음/보통/주의 with DB alternatives
+    condition: present only when plan_agent ran
+    required: false
+  - name: claims
+    type: array
+    description: Structured answer claims [{text, doc_ids}] checked by output validation
+    condition: present only for answers composed by the LLM (not refusals or clarifications)
+    required: false
+  - name: answer
+    type: string
+    description: User-facing answer text without doc_id tags, or a fixed REFUSAL_MESSAGES
+      text
+    required: true
+  - name: contexts
+    type: array
+    description: '[{doc_id, text, source?, doc_type?}] from RAG (rule, place) and
+      MCP tools (mcp:*)'
+    required: true
+  - name: trace
+    type: array
+    description: Ordered [{step, input, output, type?, name?, latency_ms?}], masked
+      and truncated to 300 chars
+    required: true
+  - name: total_latency_ms
+    type: number
+    description: Optional wall-clock time of the request
+    condition: optional top-level response field
+    required: false
+  - name: place_doc
+    type: object
+    description: 'A place row from data/places (region or travel): id, name, direction,
+      elements, env_tags, description, best_months for travel; doc_id = id'
+    condition: present in contexts when a travel or residence tool or place retrieval
+      returned it
+    required: false
+  - name: rule_chunk
+    type: object
+    description: 'A section of data/rules/*.md: doc_id rule:<topic>:<slug>, title, body'
+    condition: present in contexts when retrieve_docs returned it
+    required: false
+  - name: specialist_agent
+    type: string
+    description: One of saju_agent, travel_agent, residence_agent, plan_agent; appears
+      in trace as agent:<name>
+    condition: present when intent routing selected it
+    required: false
+  - name: guard_decision
+    type: object
+    description: 'Input guard result: action (allow, block, partial) and category
+      (a REFUSAL_MESSAGES key or none)'
+    condition: recorded in trace as guard:input on every request
+    required: false
+  - name: refusal
+    type: string
+    description: The fixed REFUSAL_MESSAGES string returned or appended for a blocked
+      category
+    condition: present only when guard_decision is block or partial
+    required: false
+evaluation_principles:
+- name: privacy
+  description: Raw birth data never reaches the LLM, logs, trace or eval artifacts;
+    only <BIRTH> appears
+  weight: 1.0
+- name: guardrail_correctness
+  description: 'All guardrail rows pass by rule: exact fixed refusal text, whole-request
+    refusal for injection, reframing with disclaimer for fatalism'
+  weight: 1.0
+- name: groundedness
+  description: Every claim cites a doc_id present in contexts; 간지/용신 come only from
+    ssaju and places only from tool-ranked DB candidates
+  weight: 0.9
+- name: contract_fidelity
+  description: POST /query, CSV columns, folder layout and trace naming follow the
+    course rules exactly, with only optional additions
+  weight: 0.9
+- name: determinism_reproducibility
+  description: Pinned reference date, deterministic parser, scoring and query expansion
+    give identical results in the grader's environment
+  weight: 0.8
+- name: answer_quality
+  description: The LLM judge scores at least 4/5 on expected_traits for non-guardrail
+    rows; intent-routed answers include only the sections asked for
+  weight: 0.8
+- name: retrieval_quality
+  description: RAGAS faithfulness, answer_relevancy, context_precision and context_recall
+    aggregates improve from round 1 to round 2
+  weight: 0.6
+exit_conditions:
+- name: pass_bar_met
+  description: The live evaluation meets the course pass bar and all deliverables
+    are committed
+  criteria: Round report shows at least 20 of 24 passed and guardrail 8/8; unit tests
+    pass; README, SERVICE.md and round1/round2 reports are present
+- name: deadline_reached
+  description: Submission deadline reached
+  criteria: 'Day 10 submission time: push the current state to public GitHub and record
+    the failing rows and known gaps in the round 2 report'
+- name: bedrock_quota_exhausted
+  description: The Bedrock daily token quota runs out during a round
+  criteria: Record unfinished rows as failures, rerun answers with SAJU_LLM_MODEL if
+    needed, re-judge saved answers with JUDGE_MODEL after the quota resets, and label
+    the round with both models; deterministic criteria (unit tests, data checks) still
+    have to pass
+- name: privacy_violation_blocker
+  description: A raw-birth-data leak is found and cannot be fixed
+  criteria: Any raw birth string in LLM prompts, trace, logs or eval outputs halts
+    submission until it is fixed
+metadata:
+  seed_id: seed_a2b0c778acc5
+  version: 1.0.0
+  created_at: '2026-10-21T07:56:14.913552Z'
+  ambiguity_score: 0.154
+  gate_forced: false
+  interview_id: interview_20261021_053303
+  parent_seed_id: null
+  generation_mode: normal
+  degraded: false
+  unresolved_slots: []
+  recovery_reason: null
+  provenance_notes:
+  - '[from-user] Full scope is must-ship by Day 10, nothing demoted to stretch; keep
+    the forked Node mcp-saju with now + get_luck_calendar (verified by the full-scope
+    rows in the pass-bar criterion)'
+  - Refined in 2 passes (see ~/.ouroboros/seed-revisions/interview_20261021_053303.md)

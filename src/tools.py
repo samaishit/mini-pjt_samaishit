@@ -6,7 +6,9 @@
 - 에이전트 도구: 사주 요약은 요청 상태(tracing.current().chart)에서 읽으므로 LLM 이 생년월일을 다룰 일이 없습니다
 - 장소 선정·이사 길흉월·계획 평가는 규칙으로 계산하고, LLM 은 결과를 설명만 합니다 (data/rules 의 기준과 동일)
 """
+import asyncio
 import json
+import re
 import sys
 import time
 from contextlib import AsyncExitStack
@@ -74,7 +76,7 @@ class MCPHub:
         요약은 contexts 의 mcp:saju 로만 노출한다.
         """
         start = time.perf_counter()
-        out = _text(await self.tools[name].ainvoke(args))
+        out = _text(await asyncio.wait_for(self.tools[name].ainvoke(args), config.MCP_CALL_TIMEOUT_S))
         current().add_step(f"tool:{name}",
                            "(출생 정보 생략)" if private else json.dumps(args, ensure_ascii=False),
                            "(계산 완료: 요약은 contexts 의 mcp:saju)" if private else out,
@@ -170,6 +172,60 @@ def chart_text(chart: dict) -> str:
     lines.append(f"이사 좋은 달: {', '.join(chart['good_move_months']) or '없음'} / "
                  f"이사 피할 달(일지 충): {', '.join(chart['avoid_move_months']) or '없음'}")
     return "\n".join(lines)
+
+
+# 명리 기준 계절 (절기 월 지지): 봄 寅卯辰, 여름 巳午未, 가을 申酉戌, 겨울 亥子丑
+SEASON_BRANCHES = {"봄": "寅卯辰", "여름": "巳午未", "가을": "申酉戌", "겨울": "亥子丑"}
+SEASON_RE = re.compile(r"(봄|여름|가을|겨울)")
+MONTH_RE = re.compile(r"(?:(\d{4})\s*년\s*|(내년|올해|이번\s*해)\s*)?(\d{1,2})\s*월(?!\s*\d{1,2}\s*일\s*생)")
+FULL_YEAR_HINT = re.compile(r"1년|일\s*년|12\s*개월|한\s*해|연간")
+
+
+def target_month_indices(question: str) -> list[int]:
+    """질문이 가리키는 절기 월 번호(1~12)를 규칙으로 고른다. 찾지 못하면 빈 목록."""
+    chart = current().chart
+    if not chart:
+        return []
+    months = chart["months"]
+    ref_year = int(chart["reference_date"][:4])
+    m = SEASON_RE.search(question)
+    if m:
+        current().season = m.group(1)
+        branches = SEASON_BRANCHES[m.group(1)]
+        return [x["index"] for x in months if x["month_ganzhi"][1] in branches]
+    picked = []
+    for y, rel, mon in MONTH_RE.findall(question):
+        year = int(y) if y else (ref_year + 1 if rel.startswith("내년") else ref_year if rel else None)
+        found = find_month(int(mon), year)
+        if found and found["index"] not in picked:
+            picked.append(found["index"])
+    if picked:
+        return picked
+    if FULL_YEAR_HINT.search(question):
+        return list(range(1, 13))
+    return []
+
+
+# 질문 키워드 → 검색 결과와 별도로 함께 넘길 규칙 문서 (활용·방위 예시가 늘 근거에 들어가도록)
+KEYWORD_RULE_DOCS = {
+    "용신": ["rule:yongsin:overview", "rule:yongsin:usage", "rule:direction:oheng"],
+    "오행": ["rule:oheng:overview", "rule:direction:environment"],
+    "십성": ["rule:sipsung:overview"],
+}
+
+
+def pre_retrieve_rules(query: str, k: int = 3) -> list[dict]:
+    """질문과 관련된 명리 규칙 문서를 먼저 검색해 contexts·trace 에 남긴다 (RAG)."""
+    from src.retriever import load_all_docs
+    chart = current().chart
+    docs = retrieve_docs(query, doc_type="rule", k=k, elements=chart["yongsin_elements"] if chart else None)
+    have = {d.metadata["doc_id"] for d in docs}
+    by_id = {d.metadata["doc_id"]: d for d in load_all_docs()}
+    for word, ids in KEYWORD_RULE_DOCS.items():
+        if word in query:
+            docs += [by_id[i] for i in ids if i not in have and i in by_id]
+            have.update(ids)
+    return _record_retrieval(query, docs, "rule")
 
 
 def find_month(month: int, year: int | None = None) -> dict | None:
@@ -303,7 +359,8 @@ async def element_direction_map() -> str:
 async def recommend_travel(month_indices: list[int], scope: str = "both") -> str:
     """사주 요약의 절기 월 번호(1~12)별로 용신에 맞는 여행지를 추천한다 (장소 DB 점수순, 같은 장소 반복 없음).
 
-    월별 여행 추천에는 반드시 이 도구를 쓴다. 12개월 전체면 month_indices=[1,...,12].
+    월별 여행 추천에는 반드시 이 도구를 쓰고, 필요한 달을 모두 담아 한 번만 호출한다.
+    메시지의 [대상 절기 월 번호]가 있으면 그 번호를 그대로 쓴다. 12개월 전체면 month_indices=[1,...,12].
 
     Args:
         month_indices: 절기 월 번호 목록 (사주 요약의 '12개 절기 월' 번호)
@@ -326,9 +383,11 @@ async def recommend_travel(month_indices: list[int], scope: str = "both") -> str
             if cands:
                 used.append(cands[0]["id"])
                 picks[sc] = {"pick": _brief(cands[0]), "alternatives": [_brief(c) for c in cands[1:]]}
-        result.append({"index": idx, "month": f"{m['month_ganzhi']}월", "period": f"{m['start_date']}~{m['end_date']}",
-                       "ten_gods": f"{m['stem_ten_god']}·{m['branch_ten_god']}", "good_month": m["good_month"],
-                       "clash": m["clash_with_day_branch"], **picks})
+        row = {"index": idx, "month": f"{m['month_ganzhi']}월", "period": f"{m['start_date']}~{m['end_date']}",
+               "ten_gods": f"{m['stem_ten_god']}·{m['branch_ten_god']}", "good_month": m["good_month"],
+               "clash": m["clash_with_day_branch"], **picks}
+        result.append(row)
+        current().travel_picks[idx] = row   # 답변의 월별 여행 표는 이 결과로 코드가 직접 만든다
     return json.dumps(result, ensure_ascii=False)
 
 

@@ -1,12 +1,12 @@
 # judge.py - 고정 루브릭 기반 LLM 심사 (day7 llm_judge 패턴)
 """positive / negative / edge 행을 expected_traits 와 forbidden 기준으로 1~5점 채점합니다.
-심사 모델과 파라미터는 고정합니다 (temperature 0). 프롬프트를 바꾸면 라운드 간 비교가 깨지므로 버전을 남깁니다."""
+심사 모델은 답변 모델(SAJU_LLM_MODEL)과 분리된 JUDGE_MODEL(기본 Sonnet 4.5)로 고정합니다 (temperature 0). 프롬프트를 바꾸면 라운드 간 비교가 깨지므로 버전을 남깁니다."""
 from langchain_aws import ChatBedrockConverse
 from pydantic import BaseModel, Field
 
 from src import config
 
-JUDGE_VERSION = "v1"
+JUDGE_VERSION = "v2"  # v2: 답변 모델과 분리된 JUDGE_MODEL 사용
 
 
 class JudgeResult(BaseModel):
@@ -44,6 +44,6 @@ _judge = None
 def judge(question: str, answer: str, traits: str, forbidden: str) -> JudgeResult:
     global _judge
     if _judge is None:
-        _judge = ChatBedrockConverse(model=config.MODEL, region_name=config.REGION, temperature=0,
+        _judge = ChatBedrockConverse(model=config.JUDGE_MODEL, region_name=config.REGION, temperature=0,
                                      max_tokens=1024).with_structured_output(JudgeResult)
     return _judge.invoke(RUBRIC.format(question=question, traits=traits, forbidden=forbidden or "없음", answer=answer))
