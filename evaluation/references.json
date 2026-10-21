@@ -1,0 +1,115 @@
+{
+  "_meta": {
+    "reference_date": "2026-10-21",
+    "window": "2026-10-08 ~ 2027-10-07 (戊戌월 ~ 己酉월)",
+    "note": "RAGAS context_recall/context_precision 용 정답. guardrail 행(17~24)은 RAGAS 대상이 아니라 제외. expected_doc_ids 중 rule:<topic> 은 접두어 일치로 판정하며, 장소 doc_id 는 장소 DB 확정 후 보강한다."
+  },
+  "1": {
+    "reference": "일간 戊, 용신 丙·癸·甲(火·水·木). 12개월 범위는 戊戌월(2026-10-08)부터 己酉월(2027-09-08~10-07)까지. 월별 국내·해외 여행지와 주거 Top 3, 이사 길월·흉월(庚子월은 일지 午와 子午충이라 피할 달)을 근거와 함께 제시.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "mcp:search_travel",
+      "mcp:search_regions",
+      "rule:yongsin"
+    ]
+  },
+  "2": {
+    "reference": "일간 壬, 용신 戊·丙·甲(土·火·木). 2027년 5월은 乙巳월(2027-05-06~06-05). 이 달의 기운과 용신에 맞는 국내·해외 여행지를 DB에서 골라 이유와 함께 제시.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "mcp:search_travel"
+    ]
+  },
+  "3": {
+    "reference": "용신 火·水·木에 맞는 방위·환경의 시·구 Top 3를 DB에서 제시. 일지 午와 충하는 庚子월(2026-12-07~2027-01-04)은 피할 달로 안내. 시세·투자 얘기는 하지 않음.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "mcp:search_regions",
+      "rule:direction"
+    ]
+  },
+  "4": {
+    "reference": "12월 삿포로 여행은 庚子월(2026-12-07~2027-01-04), 3월 이사는 癸卯월(2027-03-06~04-04)에 해당. 각 계획에 용신 土·火·木 기준 등급과 이유를 제시하고, 주의면 대안 제시.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "mcp:search_travel",
+      "mcp:search_regions"
+    ]
+  },
+  "5": {
+    "reference": "양력 1990-09-03, 일간 辛, 용신 戊·壬·丙(土·水·火). 시각 미상이라 시주 제외 안내. 己亥(11-07~12-06)·庚子(12-07~01-04)·辛丑(01-05~02-03)월의 국내 여행지 추천.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "mcp:search_travel"
+    ]
+  },
+  "6": {
+    "reference": "용신은 丙·癸·甲(火·水·木). 용신은 사주의 균형을 돕는 기운이며, 해당 오행의 방위(남·북·동)와 환경을 가까이하면 좋다는 해석을 규칙 문서 근거로 설명.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "rule:yongsin"
+    ]
+  },
+  "7": {
+    "reference": "여름은 丙午(2027-06-06~07-06)·丁未(07-07~08-07)·戊申(08-08~09-07)월. 용신 土·火·木에 맞는 해외 여행지를 DB에서 골라 이유와 함께 제시.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "mcp:search_travel"
+    ]
+  },
+  "8": {
+    "reference": "12개월 중 월운 오행이 용신(火·水·木)에 해당하는 달을 좋은 달로, 일지 午와 충하는 庚子월(2026-12-07~2027-01-04)을 조심할 달로 제시하되 단정 없이 주의점으로 표현.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "rule:wolun"
+    ]
+  },
+  "9": {
+    "reference": "남극은 여행지 DB에 없어 상세 평가를 할 수 없다고 안내하고, 4월(甲辰월 2027-04-05~05-05) 기준 DB 내 대안을 제시.",
+    "expected_doc_ids": [
+      "mcp:search_travel"
+    ]
+  },
+  "10": {
+    "reference": "2월 30일은 존재하지 않는 날짜이므로 올바른 생년월일을 다시 입력해 달라고 요청.",
+    "expected_doc_ids": []
+  },
+  "11": {
+    "reference": "성별이 없어 계산할 수 없으니 성별을 알려 달라고 요청.",
+    "expected_doc_ids": []
+  },
+  "12": {
+    "reference": "기준일 2026-10-21 기준 12개월(2026-10-08~2027-10-07)만 안내할 수 있어 2028년 3월은 평가하지 않고, 범위 안의 이사 길월을 대안으로 안내.",
+    "expected_doc_ids": [
+      "mcp:saju"
+    ]
+  },
+  "13": {
+    "reference": "음력 윤3월 10일은 양력 1993-05-01, 일간 壬, 용신 戊·丙·甲(土·火·木). 12개월 월별 여행지를 제시.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "mcp:search_travel"
+    ]
+  },
+  "14": {
+    "reference": "11/5~11/6은 戊戌월, 11/7~11/10은 己亥월(입동 기준). 두 달의 월운을 각각 설명.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "rule:wolun"
+    ]
+  },
+  "15": {
+    "reference": "남편의 사주는 다루지 않고 본인 사주 기준으로 봄(壬寅 02-04~, 癸卯 03-06~, 甲辰 04-05~05-05) 여행지를 추천.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "mcp:search_travel"
+    ]
+  },
+  "16": {
+    "reference": "용신 土·火·木 기준 시·구 추천은 제시하고, 시세 전망은 부동산 투자 조언이라 제공하지 않는다고 고정 문구로 안내.",
+    "expected_doc_ids": [
+      "mcp:saju",
+      "mcp:search_regions"
+    ]
+  }
+}

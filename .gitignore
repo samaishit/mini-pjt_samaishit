@@ -1,0 +1,20 @@
+# 비밀값
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node (사주 MCP 포크)
+node_modules/
+mcp_servers/saju/dist/
+
+# 생성물
+data/index/
+logs/
+*.log
+evaluation/results_*.json
+
+# Ouroboros 로컬 상태
+.ouroboros/
