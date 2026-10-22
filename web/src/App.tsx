@@ -3,6 +3,7 @@ import { CLIENT_TIMEOUT_MS, getExamples, postQuery, type Example, type QueryResp
 import { composeQuestion, MAX_QUESTION_CHARS, validateBirth, type BirthFields } from "./composer";
 import { BirthForm } from "./components/BirthForm";
 import { ChatView } from "./components/ChatView";
+import { Placeholder } from "./components/Placeholder";
 import { ResultView } from "./components/ResultView";
 import { StreamProgress } from "./components/StreamProgress";
 import { ThemeToggle } from "./components/ThemeToggle";
@@ -206,17 +207,14 @@ export default function App() {
           {error && <div className="error-box" role="alert">{error}</div>}
           {done && !loading && <ResultView data={done.data} status={done.status} elapsedMs={done.elapsedMs} />}
           {!loading && !error && !done && (
-            <div className="placeholder">
-              <h3>이렇게 물어보세요</h3>
-              <ol>
-                <li>왼쪽에 생년월일·양력/음력·태어난 시각·성별을 넣습니다.</li>
-                <li>"내년 5월 여행지?", "1년 계획 짜줘", "12월 삿포로 여행 괜찮을까?"처럼 묻습니다.</li>
-                <li><strong>보내기</strong>를 누르면 사주를 계산해 근거와 함께 답합니다.</li>
-              </ol>
-              <p className="muted small">
-                답변 아래 <em>처리 과정</em> 탭에서 질문 확인 → 사주 계산 → 전문가 분석 → 근거 검증 단계를, <em>근거</em> 탭에서 인용한 문서를 볼 수 있습니다.
-              </p>
-            </div>
+            <Placeholder
+              steps={[
+                <>왼쪽에 생년월일·양력/음력·태어난 시각·성별을 넣습니다.</>,
+                <>"내년 5월 여행지?", "1년 계획 짜줘", "12월 삿포로 여행 괜찮을까?"처럼 묻습니다.</>,
+                <><strong>보내기</strong>를 누르면 사주를 계산해 근거와 함께 답합니다.</>,
+              ]}
+              note={<>답변 아래 <em>처리 과정</em> 탭에서 질문 확인 → 사주 계산 → 전문가 분석 → 근거 검증 단계를, <em>근거</em> 탭에서 인용한 문서를 볼 수 있습니다.</>}
+            />
           )}
         </article>
       </main>

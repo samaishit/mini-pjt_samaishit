@@ -3,6 +3,7 @@ import { SajuMarkdown } from "./SajuMarkdown";
 import { CLIENT_TIMEOUT_MS, endChat, foldedMarkdown, postChat, type ChatResponse, type ChatSession } from "../api";
 import { birthSentence, MAX_QUESTION_CHARS, validateBirth, type BirthFields } from "../composer";
 import { BirthForm } from "./BirthForm";
+import { Placeholder } from "./Placeholder";
 import { ResultView } from "./ResultView";
 import { StreamProgress } from "./StreamProgress";
 import { INITIAL_PROGRESS, postChatStream, reduceProgress, type Progress } from "../stream";
@@ -149,10 +150,14 @@ export function ChatView() {
       <article className={`panel thread${messages.length ? "" : " watermark"}`}>
         <div className="messages" aria-live="polite" ref={listRef}>
           {!messages.length && (
-            <div className="placeholder muted">
-              <p>예: <em>내년 5월에 여행 어디로 가면 좋을까?</em> → <em>그럼 해외는?</em> → <em>다른 곳도 알려줘</em></p>
-              <p className="small">두 번째 질문부터는 출생 정보 없이 이어서 물어보세요.</p>
-            </div>
+            <Placeholder
+              steps={[
+                <>왼쪽에 생년월일·양력/음력·태어난 시각·성별을 넣고 <strong>첫 메시지에 출생 정보 붙이기</strong>를 켜 둡니다.</>,
+                <>"내년 5월에 여행 어디로 가면 좋을까?"처럼 첫 질문을 보냅니다.</>,
+                <>이어서 "그럼 해외는?", "다른 곳도 알려줘"처럼 출생 정보 없이 물어봅니다.</>,
+              ]}
+              note={<>왼쪽 <em>대화 기억</em>에서 서버가 기억한 사주 요약과 앞 질문을 볼 수 있고, 앞에서 이미 본 내용은 답변 아래에 접어 둡니다.</>}
+            />
           )}
           {messages.map((m, i) =>
             m.role === "user" ? (

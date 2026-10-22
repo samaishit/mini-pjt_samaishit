@@ -160,7 +160,9 @@ h1, h2, h3, h4 { font-family: var(--serif); letter-spacing: -0.01em; }
 
 /* ---------- 레이아웃 · 카드 ---------- */
 /* 단일 질의: 입력·답변 패널을 화면 아래 끝까지 같은 높이로, 넘치면 각 패널 안에서 스크롤 (대화 탭과 같은 방식) */
-.layout { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 18px; align-items: stretch;
+/* 왼쪽 사이드(입력·대화 기억) 너비는 두 탭이 같은 값을 쓴다 */
+:root { --side-col: minmax(320px, 420px); }
+.layout { display: grid; grid-template-columns: var(--side-col) 1fr; gap: 18px; align-items: stretch;
   height: var(--fit-h, auto); }   /* --fit-h: useFitHeight 가 실제 위치로 계산 */
 .page .layout > article.panel { height: 100%; min-height: 0; overflow-y: auto; }
 @media (max-width: 860px) {
@@ -278,7 +280,7 @@ pre { margin: 0 0 8px; padding: 8px 10px; white-space: pre-wrap; word-break: bre
 
 /* ---------- 대화 탭 ---------- */
 /* 대화창과 기억 패널은 화면 높이에 맞춘 같은 높이로 두고, 넘치는 내용은 각 패널 안에서 스크롤한다 */
-.chat { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; gap: 18px; align-items: stretch;
+.chat { display: grid; grid-template-columns: var(--side-col) 1fr; gap: 18px; align-items: stretch;
   height: var(--fit-h, max(520px, calc(100dvh - 200px))); }   /* --fit-h: useFitHeight 가 실제 위치로 계산 */
 .page .chat article.panel { height: 100%; min-height: 0; }
 .memory { overflow-y: auto; }
