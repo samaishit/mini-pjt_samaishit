@@ -20,8 +20,11 @@ constraints:
 - 'The API is exactly POST /query with request {question} and response {answer, contexts,
   trace}; only optional fields may be added (contexts: source, doc_type; trace: type,
   name, latency_ms; top-level total_latency_ms); there is no date field in the request'
-- 'The service is stateless with a single entry point: no CLI, no Markdown/JSON report
-  files, no multi-turn thread_id/checkpointer'
+- 'POST /query is stateless: no CLI, no Markdown/JSON report files, no multi-turn
+  thread_id/checkpointer. The only stateful path is the optional POST /chat used by
+  the web UI chat tab: an in-process session memory (TTL 1 hour, at most 200 sessions)
+  holding the <BIRTH>-masked questions, the derived saju chart and shown place ids,
+  never raw birth data; DELETE /chat/{session_id} clears it. Evaluation uses /query only'
 - 'Course layout is mandatory: src/agent.py, src/tools.py, src/retriever.py, data/,
   evaluation/test_queries.csv, evaluation round1 and round2 reports, SERVICE.md, README.md'
 - 'evaluation/test_queries.csv has exactly the 7 course columns: id, category, input,

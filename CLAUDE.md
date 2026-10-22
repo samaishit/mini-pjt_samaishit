@@ -40,6 +40,7 @@ mini-pjt_samaishit/
 │   ├── llm.py            # Bedrock LLM 생성 + 한도 초과 시 대체 모델(MODEL_FALLBACKS) 재호출
 │   ├── hanja.py          # 간지·오행 한자 → '한글(한자)' 표기 (사용자 출력 직전)
 │   ├── glossary.py       # 답변에 나온 명리 용어의 일상어 풀이 (규칙 문서 doc_id 근거)
+│   ├── chat.py           # POST /chat 세션 단기 기억 (이어 묻기, 사주 요약 재사용)
 │   └── config.py         # MODEL, MODEL_FALLBACKS, REFERENCE_DATE 등 상수
 ├── mcp_servers/
 │   ├── saju/             # mcp-saju 포크 (now 파라미터, get_luck_calendar)
@@ -59,7 +60,7 @@ mini-pjt_samaishit/
 
 ## 핵심 설계 규칙
 
-- **API 계약**: `POST /query {"question"}` → `{answer, contexts:[{doc_id, text, source?, doc_type?}], trace:[{step, input, output, type?, name?, latency_ms?}]}`. 과정 키는 그대로 두고 선택 필드만 더한다. 상태 없음(멀티턴 없음).
+- **API 계약**: `POST /query {"question"}` → `{answer, contexts:[{doc_id, text, source?, doc_type?}], trace:[{step, input, output, type?, name?, latency_ms?}]}`. 과정 키는 그대로 두고 선택 필드만 더한다. `/query` 는 상태 없음(멀티턴 없음). 웹 화면 대화 탭용 `POST /chat` 만 세션 단기 기억(가린 질문·사주 요약·보여 준 장소, 원본 생년월일 저장 금지)을 둔다.
 - **trace step 이름**: `guard:input`, `parse:birth`, `retrieve`, `tool:<이름>`, `agent:<이름>`, `llm:<노드>`, `guard:output`. input/output은 마스킹 후 300자로 자른다. 사주 MCP 호출은 output만 기록한다.
 - **처리 순서**: 제3자 규칙 검사 → 출생 정보 파서 → 입력 가드 LLM 판별(치환된 문장만) → 사주 계산(LLM 없이 MCP 직접 호출) → Supervisor(질문 의도에 따라 saju/travel/residence/plan 에이전트 선택) → 출력 검증.
 - **개인정보**: 생년월일 원문은 파서와 사주 MCP 호출 인자에만 존재한다. LLM 프롬프트, 로그, trace, 평가 결과 파일에는 `<BIRTH>`만 남긴다. 계산된 간지·십성·용신은 LLM에 보내도 된다.

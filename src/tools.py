@@ -187,11 +187,33 @@ MONTH_RE = re.compile(r"(?:(\d{4})\s*년\s*|(내년|올해|이번\s*해)\s*)?(\d
 FULL_YEAR_HINT = re.compile(r"1년|일\s*년|12\s*개월|한\s*해|연간")
 
 
+# 대화(/chat)에서 이어 묻는 말을 앞 질문 뒤에 붙일 때 쓰는 표시. 뒤쪽(이번 말)에 달·계절이 있으면 그것을 우선한다
+FOLLOWUP_MARK = "(이어서 묻는 말)"
+
+
+def latest_part(question: str) -> str:
+    """이어 묻기라면 이번에 한 말만, 아니면 질문 전체."""
+    return question.split(FOLLOWUP_MARK)[-1] if FOLLOWUP_MARK in question else question
+
+
+def travel_scope(question: str) -> str | None:
+    """질문이 정한 여행 범위. 이어 묻기면 이번 말을 먼저 본다 (예: '그럼 해외는?' → overseas)."""
+    for text in reversed(question.split(FOLLOWUP_MARK)):   # 가장 최근 말부터, 범위를 정한 첫 말을 따른다
+        dom, ovs = "국내" in text, "해외" in text
+        if dom != ovs:
+            return "domestic" if dom else "overseas"
+        if dom and ovs:
+            return "both"
+    return None
+
+
 def target_month_indices(question: str) -> list[int]:
     """질문이 가리키는 절기 월 번호(1~12)를 규칙으로 고른다. 찾지 못하면 빈 목록."""
     chart = current().chart
     if not chart:
         return []
+    if FOLLOWUP_MARK in question:   # 이어 묻는 말에 달·계절이 있으면 그것만, 없으면 앞 질문의 달
+        return target_month_indices(latest_part(question)) or target_month_indices(question.split(FOLLOWUP_MARK)[0])
     months = chart["months"]
     ref_year = int(chart["reference_date"][:4])
     m = SEASON_RE.search(question)
@@ -249,6 +271,8 @@ def split_date_spans(question: str) -> list[dict]:
     chart = current().chart
     if not chart:
         return []
+    if FOLLOWUP_MARK in question and DATE_SPAN_RE.search(latest_part(question)):
+        question = latest_part(question)
     ref = date.fromisoformat(chart["reference_date"])
     spans = []
     for m1, d1, m2, d2 in DATE_SPAN_RE.findall(question):
@@ -332,6 +356,17 @@ def match_province(text: str) -> str | None:
         if any(a in text for a in aliases):
             return prov
     return None
+
+
+def find_places(text: str) -> list[dict]:
+    """문장에 이름이 나온 DB 장소를 모두 찾는다 (인용 보정용, 짧은 일반 지명은 제외)."""
+    found = []
+    for p in PLACES:
+        for a in _aliases(p["name"]):
+            if a in text and a not in ("서울", "부산", "인천", "대구", "대전", "광주", "울산", "일본", "중국", "미국"):
+                found.append(p)
+                break
+    return found
 
 
 def lookup_place(text: str, kind: str | None = None) -> dict | None:
@@ -446,8 +481,10 @@ async def recommend_travel(month_indices: list[int], scope: str = "both") -> str
     chart = current().chart
     if not chart:
         return NO_CHART
+    if current().travel_scope:   # 질문이 국내/해외를 정했으면 에이전트가 고른 범위보다 우선한다
+        scope = current().travel_scope
     scopes = ["domestic", "overseas"] if scope == "both" else [scope]
-    used: list[str] = []
+    used: list[str] = list(current().exclude_ids)   # 대화에서 이미 보여 준 장소는 빼고 고른다
     result = []
     for idx in month_indices:
         if not 1 <= idx <= 12:

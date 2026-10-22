@@ -240,7 +240,14 @@ def main():
                                        ensure_ascii=False, indent=1), encoding="utf-8")
 
     all_cases = load_cases()
-    scores = [score_case(c, results[c["id"]], not args.no_judge) for c in all_cases if c["id"] in results]
+    scores_path = RUNS_DIR / f"round{args.round}_scores.json"
+    if args.rescore and args.ids and scores_path.exists():
+        # 지정한 행만 다시 심사하고 나머지는 저장된 판정을 쓴다 (예: 심사 한도 초과로 판정 못 한 행)
+        kept = {s["id"]: s for s in json.loads(scores_path.read_text(encoding="utf-8"))["scores"]}
+        scores = [score_case(c, results[c["id"]], not args.no_judge) if c["id"] in wanted else kept[c["id"]]
+                  for c in all_cases if c["id"] in results]
+    else:
+        scores = [score_case(c, results[c["id"]], not args.no_judge) for c in all_cases if c["id"] in results]
     from evaluation.judge import JUDGE_VERSION
     summary = summarize(scores)
     answer_model = json.loads(run_path.read_text(encoding="utf-8")).get("model", config.MODEL)

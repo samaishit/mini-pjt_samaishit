@@ -63,11 +63,14 @@ STRENGTH_KO = {"weak": "신약한", "strong": "신강한", "neutral": "중화된
 # '용신 水·木' 처럼 용신이라고 말한 오행 (한자 또는 '수(水)' 표기)
 YONGSIN_CLAIM_RE = re.compile(r"용신\s*(?:인|은|는|이|의|중|으로)?\s*((?:[가-힣]\()?[木火土金水]\)?(?:\s*[·,]\s*(?:[가-힣]\()?[木火土金水]\)?)*)")
 PILLAR_KO = {"year": "연주", "month": "월주", "day": "일주", "hour": "시주"}
+# 스트리밍 화면에 보여 줄 전문가 이름
+AGENT_LABELS = {"saju_agent": "사주 해석", "travel_agent": "여행", "residence_agent": "주거", "plan_agent": "계획 평가"}
 # 답변 섹션 표시 순서
 SECTION_ORDER = {name: i for i, name in enumerate(
     ["한눈에 보기", "사주 요약", "사주 해석", "월별 운세", "계획 평가", "여행 추천", "주거 추천", "이사 시기", "안내",
      "용어 풀이", "근거 자료"])}
-AGENT_MAX_TOKENS = 1500   # 전문 에이전트 보고 길이 상한
+COMPOSE_MAX_TOKENS = 4096   # 답변 작성 출력 상한 (섹션별 claim 수 상한과 함께)
+AGENT_MAX_TOKENS = 800    # 전문 에이전트 보고 길이 상한 (표·목록은 코드가 만들므로 짧게)
 # 계획 전용 질문에서 코드가 만든 '계획 평가'로 대체하는 작성자 섹션
 PLAN_REPLACED_SECTIONS = {"계획 평가", "여행 추천", "이사 시기", "주거 추천"}
 
@@ -126,7 +129,10 @@ def josa(word: str, with_final: str, without_final: str) -> str:
     """앞말의 받침 유무로 조사를 고른다 (한자 오행은 한글 읽기로 판단). 예: josa('삿포로', '은', '는') → '는'"""
     last = ELEMENT_READING.get(word[-1], word[-1]) if word else ""
     if "가" <= last <= "힣":
-        return with_final if (ord(last) - 0xAC00) % 28 else without_final
+        final = (ord(last) - 0xAC00) % 28
+        if with_final == "으로" and final == 8:   # ㄹ 받침 뒤에는 '로' (예: 서울로)
+            return without_final
+        return with_final if final else without_final
     return with_final
 
 
@@ -148,12 +154,14 @@ COMMON_RULES = """[공통 규칙]
 - 부동산은 지역의 기운과 이사 시기까지만 말한다. 시세·집값 전망·매수·매도·청약·대출·투자는 말하지 않는다.
 - 사주 요약이 없으면(출생 정보 없음) 개인 맞춤 추천을 하지 말고 생년월일이 필요하다고 보고한다.
 - 사주 요약이 있으면 출생 시각 등 정보를 다시 요구하지 말고 그대로 도구를 호출한다(시각 미상은 시주 제외로 이미 반영됨).
-- 보고는 한국어 짧은 bullet 15개 이내로, 도구 결과의 핵심 사실만 쓴다(인사말·이모지·표·전체 계획 재작성 금지).
+- 보고는 한국어 짧은 bullet 8개 이내로, 도구 결과의 핵심 사실만 쓴다(인사말·이모지·표·전체 계획 재작성 금지).
+  월별 여행 표·주거 Top 3·계획 등급 문장은 시스템이 도구 결과로 직접 만들므로 다시 나열하지 않는다.
   각 사실 뒤에 근거 doc_id 를 [doc_id] 형태로 붙인다
   (예: [mcp:saju], [rule:yongsin:overview], [T-OS-SAPPORO], [tool:evaluate_plan])."""
 
 SAJU_PROMPT = f"""너는 사주 해석 전문가(saju_agent)다. 용신·오행·십성의 의미, 좋은 달과 조심할 달, 특정 기간의 운,
-절기 경계 해석을 담당한다. 해석 근거가 필요하면 retrieve_rule_docs 를 1~2회 호출해 규칙 문서를 인용한다.
+절기 경계 해석을 담당한다. 메시지의 [관련 해석 규칙]에 이미 규칙 문서가 들어 있으니 그것을 인용하고,
+retrieve_rule_docs 는 거기에 없는 개념이 꼭 필요할 때만 한 번 호출한다.
 좋은 달은 '용신 일치'가 있고 '충'이 없는 달, 조심할 달은 일지 '충'이 있는 달이다.
 날짜 구간이 절기 경계에 걸치면 경계 전후를 나누어 설명한다.
 {COMMON_RULES}"""
@@ -163,11 +171,13 @@ TRAVEL_PROMPT = f"""너는 여행 추천 전문가(travel_agent)다. 월별 여�
 - 계절은 명리 기준이다: 봄=寅卯辰월, 여름=巳午未월, 가을=申酉戌월, 겨울=亥子丑월.
 - 국내/해외 요청에 맞춰 scope 를 고른다(언급 없으면 both).
 각 달의 pick 을 추천하고 이유는 점수 근거(용신 오행·방위·추천 월)로 설명한다. 동행자가 있어도 사용자 본인 사주 기준이라고 밝힌다.
+recommend_travel 결과에 장소 설명이 이미 들어 있으므로 get_travel·retrieve_place_docs 는 사용자가 특정 장소를 자세히 물을 때만 부른다.
 {COMMON_RULES}"""
 
 RESIDENCE_PROMPT = f"""너는 주거 추천 전문가(residence_agent)다. 주거 지역과 이사 시기는 반드시 recommend_residence 로 구한다.
 Top 3 지역과 그 이유(오행·방위·환경), 이사하기 좋은 달과 피할 달(일지 충)을 보고한다.
 투자 판단이 아니라는 점을 한 줄로 밝힌다.
+recommend_residence 결과에 지역 설명이 이미 들어 있으므로 get_region·retrieve_place_docs 는 사용자가 특정 지역을 자세히 물을 때만 부른다.
 {COMMON_RULES}"""
 
 PLAN_PROMPT = f"""너는 계획 평가 전문가(plan_agent)다. 사용자가 말한 계획(언제 어디로 여행, 언제 이사 등)마다
@@ -209,7 +219,8 @@ COMPOSE_PROMPT = """당신은 사주 라이프 플래너의 최종 답변 작성
     한눈에 보기 claim 의 doc_ids 에는 mcp:saju 를 넣는다.
     '사주 요약'(원국·일간·용신·12개월 흐름)은 시스템이 붙이므로 쓰지 않는다. 질문과 관련된 해석(그 달 월운의 십성 의미,
     용신과의 관계)은 '사주 해석' 섹션에 쓴다.
-12. '당신'이라고 부르지 말고 주어를 생략하거나 '~님'처럼 정중하게 쓴다.
+12. claim 은 섹션마다 3개 이내, 전체 12개 이내로 쓴다. 표·목록은 시스템이 붙이므로 같은 내용을 되풀이하지 않는다.
+    '당신'이라고 부르지 말고 주어를 생략하거나 '~님'처럼 정중하게 쓴다.
 13. 계획 평가 claim 은 '좋음/보통/주의' 등급 이름과 해당 절기 월 기간을 반드시 함께 쓴다.
 14. 여러 달을 추천하는 요청이면 보고에 나온 달마다 국내·해외 추천을 빠짐없이 옮긴다.
 15. 용신 일치 오행은 사주 요약 표의 '용신 일치' 값 그대로 쓴다. 월운과 용신은 오행으로 비교한다
@@ -220,7 +231,8 @@ COMPOSE_PROMPT = """당신은 사주 라이프 플래너의 최종 답변 작성
 18. doc_id 는 doc_ids 필드에만 넣고 text 에는 [doc_id] 같은 태그를 쓰지 않는다.
     대신 해석 근거는 "명리 해설 「용신이란」에 따르면"처럼 문서 제목으로 자연스럽게 밝힌다.
 19. 간지·오행은 '무술(戊戌)월', '병오(丙午)년', '토(土)', '병화(丙火)'처럼 한글 읽기 뒤 괄호에 한자를 쓴다. 한자만 단독으로 쓰지 않는다.
-20. 질문에 먼저 답하고, 왜 그런지를 사용자의 용신·그 달 월운(십성)과 장소의 오행·방위·환경으로 연결해 2~3문장으로 설명한다.
+20. 질문에 '(이어서 묻는 말)'이 있으면 대화의 이어지는 질문이다. 앞 문장은 맥락이고, 그 뒤의 말에 답하는 것이 우선이다.
+    질문에 먼저 답하고, 왜 그런지를 사용자의 용신·그 달 월운(십성)과 장소의 오행·방위·환경으로 연결해 2~3문장으로 설명한다.
 {travel_note}
 {feedback}
 [사용자 질문]
@@ -247,6 +259,8 @@ class QueryState(TypedDict, total=False):
     violations: list[str]
     attempts: int
     final: str
+    preset_chart: dict          # 대화(/chat)에서 기억해 둔 사주 요약 (원본 생년월일 없음)
+    prior_answer: str           # 대화(/chat)에서 직전에 보여 준 답변 요약 (같은 해석을 되풀이하지 않게)
 
 
 class SajuPlannerApp:
@@ -254,7 +268,7 @@ class SajuPlannerApp:
         self.hub = hub
         self.use_llm_guard = use_llm_guard
         self.supervisor = self._build_supervisor()
-        self.composer = llm(8192).with_structured_output(StructuredAnswer)
+        self.composer = llm(COMPOSE_MAX_TOKENS).with_structured_output(StructuredAnswer)
         self.graph = self._build_graph()
 
     # ---- 구성 ----
@@ -298,6 +312,7 @@ class SajuPlannerApp:
 
     async def guard_input(self, s: QueryState) -> QueryState:
         st = self._state()
+        st.emit("input", "질문과 출생 정보를 확인하고 있어요")
         if guards.check_third_party(s["question"]):
             guards.log_block("third_party", "제3자 규칙")
             st.add_step("guard:input", "(원문 생략)", "block: third_party", type="guard", name="third_party")
@@ -318,7 +333,15 @@ class SajuPlannerApp:
 
     async def saju(self, s: QueryState) -> QueryState:
         if s.get("birth"):
+            self._state().emit("saju", "만세력으로 사주와 앞으로 12개월의 운을 계산하고 있어요")
             await tools.compute_chart(s["birth"], config.REFERENCE_DATE)
+        elif s.get("preset_chart"):
+            self._state().emit("saju", "대화에서 기억해 둔 사주를 불러왔어요")
+            # 대화 중 이전 턴에서 계산한 사주 요약을 다시 쓴다 (생년월일을 다시 받지 않음)
+            st = self._state()
+            st.chart = s["preset_chart"]
+            st.add_context("mcp:saju", tools.chart_text(st.chart), "tool", "saju")
+            st.add_step("memory:chart", "세션에 기억된 사주 요약", "reuse", type="memory", name="session_chart")
         return {}
 
     async def run_supervisor(self, s: QueryState) -> QueryState:
@@ -326,9 +349,13 @@ class SajuPlannerApp:
         chart_block = tools.chart_text(st.chart) if st.chart else "(출생 정보 없음: 사주 요약이 없습니다)"
         need = required_agents(s["masked"])
         st.route = need
+        st.emit("route", "질문에 맞는 전문가를 골랐어요: " + ", ".join(AGENT_LABELS.get(a, a) for a in need), agents=need)
+        st.travel_scope = tools.travel_scope(s["masked"])
         indices = tools.target_month_indices(s["masked"])
         content = (f"[기준일] {config.REFERENCE_DATE}\n[사주 요약 · doc_id=mcp:saju]\n{chart_block}\n\n"
                    f"[사용자 질문]\n{s['masked']}\n\n[필수 호출 에이전트] {', '.join(need)}")
+        if st.travel_scope in ("domestic", "overseas"):
+            content += f"\n[여행 범위] {'국내만' if st.travel_scope == 'domestic' else '해외만'} (recommend_travel scope={st.travel_scope})"
         if indices:
             # 번호만 주면 양력 월로 오해하므로 간지와 기간을 함께 적는다
             months = {m["index"]: m for m in st.chart["months"]}
@@ -364,8 +391,7 @@ class SajuPlannerApp:
         reports += [r for r in await asyncio.gather(*(fallback(n) for n in missing)) if r]
         # 여행 추천이 필요한데 월별 추천 도구가 불리지 않았으면 규칙대로 직접 계산한다
         if "travel_agent" in need and st.chart and not st.travel_picks:
-            scope = "domestic" if "국내" in s["masked"] and "해외" not in s["masked"] else \
-                "overseas" if "해외" in s["masked"] and "국내" not in s["masked"] else "both"
+            scope = st.travel_scope or "both"   # 이어 묻는 말에 국내/해외가 있으면 그것을 따른다
             await tools.recommend_travel.ainvoke({"month_indices": indices or list(range(1, 13)), "scope": scope})
             st.add_step("agent:travel_agent", "fallback", "recommend_travel 직접 호출", type="agent", name="travel_agent")
         # 주거 추천이 필요한데 recommend_residence 가 불리지 않았으면 규칙대로 직접 계산한다
@@ -380,36 +406,35 @@ class SajuPlannerApp:
         st = self._state()
         if not st.chart or not st.travel_picks:
             return []
-        ys = set(st.chart["yongsin_elements"])
         months = {m["index"]: m for m in st.chart["months"]}
         basis = ["mcp:saju"] + [d for d in ("rule:direction:oheng",) if d in st.contexts]
+        ys = "·".join(st.chart["yongsin_elements"])
         claims = [Claim(section="여행 추천",
-                        text=f"용신이 {'·'.join(st.chart['yongsin_elements'])}이므로, 그 달에 가기 좋은 곳 가운데 용신 오행의 "
-                             f"기운이 있고 용신 오행의 방위(木 동, 火 남, 土 중앙, 金 서, 水 북)에 가까운 곳을 장소 DB 점수로 골랐습니다.",
+                        text=f"필요한 기운(용신)이 {ys}이라, 그 기운이 담긴 곳이나 그 기운의 방향(木은 동쪽, 火는 남쪽, "
+                             f"土는 중앙, 金은 서쪽, 水는 북쪽)에 있는 곳을 추천 여행지 목록에서 골랐습니다.",
                         doc_ids=basis)]
-        for idx in sorted(st.travel_picks):
+        for n, idx in enumerate(sorted(st.travel_picks)):
             row, m = st.travel_picks[idx], months[idx]
-            parts, ids, last = [], ["mcp:saju"], ""
-            for scope, label in (("domestic", "국내"), ("overseas", "해외")):
-                pick = (row.get(scope) or {}).get("pick")
-                if not pick:
-                    continue
-                match = "·".join(e for e in pick["elements"] if e in ys)
-                aspect = f"용신 {match} 기운" if match else f"{pick['elements'][0]} 기운"
-                if (pick.get("score_breakdown") or {}).get("direction"):
-                    aspect += "·용신 방위"
-                place = next((p for p in tools.PLACES if p["id"] == pick["id"]), {})
-                feature = "·".join((place.get("env_tags") or [])[:2])
-                parts.append(f"{label} {pick['name']}({pick['direction']}쪽, {aspect}" + (f", {feature}" if feature else "") + ")")
-                ids.append(pick["id"])
-                last = pick["name"]
-            if not parts:
+            dom = (row.get("domestic") or {}).get("pick")
+            ovs = (row.get("overseas") or {}).get("pick")
+            if not dom and not ovs:
                 continue
-            note = " 일지와 충하는 달이라 일정에 여유를 두세요." if m["clash_with_day_branch"] else ""
-            claims.append(Claim(section="여행 추천",
-                                text=f"{m['month_ganzhi']}월({m['start_date']} ~ {m['end_date']})에는 {', '.join(parts)}"
-                                     f"{josa(last, '을', '를')} 추천합니다.{note}",
-                                doc_ids=ids))
+            when = f"{m['month_ganzhi']}월({m['start_date']} ~ {m['end_date']})"
+            sentences = []
+            if dom:
+                lead = f"{when}에는 국내 {dom['name']}{josa(dom['name'], '을', '를')} 추천합니다. 이곳은"
+                sentences.append(self._place_sentence(dom["id"], lead=lead))
+            if ovs:
+                if dom:   # 두 가지 말투를 번갈아 써서 12개월 표가 같은 문장으로 반복되지 않게 한다
+                    lead = (f"해외라면 {ovs['name']}{josa(ovs['name'], '이', '가')} 좋습니다. 이곳은" if n % 2 == 0
+                            else f"해외로는 {ovs['name']}{josa(ovs['name'], '을', '를')} 꼽았습니다. 이곳은")
+                else:
+                    lead = f"{when}에는 해외 {ovs['name']}{josa(ovs['name'], '을', '를')} 추천합니다. 이곳은"
+                sentences.append(self._place_sentence(ovs["id"], lead=lead))
+            if m["clash_with_day_branch"]:
+                sentences.append("다만 이 달은 내 기운과 부딪히는(일지 충) 달이라 일정에 여유를 두세요.")
+            ids = ["mcp:saju"] + [p["id"] for p in (dom, ovs) if p]
+            claims.append(Claim(section="여행 추천", text=" ".join(sentences), doc_ids=ids))
         return claims if len(claims) > 1 else []
 
     def _residence_claims(self) -> list[Claim]:
@@ -418,44 +443,44 @@ class SajuPlannerApp:
         res = st.residence
         if not st.chart or not res:
             return []
-        ys = set(st.chart["yongsin_elements"])
         months = {m["month_ganzhi"]: m for m in st.chart["months"]}
         basis = [d for d in ("mcp:saju", "rule:residence:selection") if d in st.contexts]
         claims = []
         for rank, r in enumerate(res["top3"], 1):
-            place = next((p for p in tools.PLACES if p["id"] == r["id"]), {})
-            match = "·".join(e for e in r["elements"] if e in ys)
-            aspect = f"용신 {match} 기운" if match else f"{r['elements'][0]} 기운"
-            feature = "·".join((place.get("env_tags") or [])[:2])
-            claims.append(Claim(section="주거 추천",
-                                text=f"{rank}위 {r['name']}: {r['direction']} 방위에 {aspect}이 있고"
-                                     + (f" {feature}{josa(feature, '이', '가')} 있는" if feature else "") + " 지역입니다.",
+            lead = f"{rank}위 {r['name']}{josa(r['name'], '은', '는')}"
+            claims.append(Claim(section="주거 추천", text=self._place_sentence(r["id"], lead=lead),
                                 doc_ids=basis + ([r["id"]] if r["id"] in st.contexts else [])))
         span = lambda g: f"{g}월({months[g]['start_date']} ~ {months[g]['end_date']})"
         move_ids = [d for d in ("mcp:saju", "rule:residence:move-timing") if d in st.contexts]
         if res["good"]:
-            claims.append(Claim(section="이사 시기", text=f"이사하기 좋은 달은 {', '.join(span(g) for g in res['good'])}입니다.",
+            claims.append(Claim(section="이사 시기",
+                                text=f"이사는 필요한 기운이 들어오는 {', '.join(span(g) for g in res['good'])}에 하면 좋습니다.",
                                 doc_ids=move_ids))
         if res["avoid"]:
+            avoid = ", ".join(span(a) for a in res["avoid"])
             claims.append(Claim(section="이사 시기",
-                                text=f"{', '.join(span(a) for a in res['avoid'])}은 일지와 충하는 달이라 이사를 피하는 것이 좋습니다.",
+                                text=f"{avoid}{josa(avoid[-1], '은', '는')} 내 기운과 부딪히는(일지 충) 달이라 이사는 피하는 편이 좋습니다.",
                                 doc_ids=move_ids))
         return claims
 
     @staticmethod
-    def _place_facts(place_id: str, month: int | None = None) -> tuple[str, list[str]]:
-        """장소가 사용자 용신과 맞는 이유 (장소 DB 값만): 이름과 [방위, 환경 특징, 용신 일치, 추천 월]."""
+    def _place_sentence(place_id: str, month: int | None = None, lead: str | None = None) -> str:
+        """장소가 맞는 이유를 한 문장으로 (장소 DB 값만): 특징·방향·필요한 기운·제철."""
         st = current_state()
         place = next(p for p in tools.PLACES if p["id"] == place_id)
-        hit = [e for e in place["elements"] if e in set(st.chart["yongsin_elements"])]
-        facts = [f"{place['direction']}쪽"]
-        if place.get("env_tags"):
-            facts.append("·".join(place["env_tags"][:3]))
-        facts.append(f"용신 {'·'.join(hit)} 기운" if hit else f"{'·'.join(place['elements'])} 기운(용신과 겹치지 않음)")
+        hit = "·".join(e for e in place["elements"] if e in set(st.chart["yongsin_elements"]))
+        name = place["name"]
+        kind = "여행지" if place["kind"] == "travel" else "지역"
+        feat = "·".join((place.get("env_tags") or [])[:2])
+        where = f"{feat}{josa(feat, '이', '가')} 있는 {place['direction']}쪽 {kind}" if feat else f"{place['direction']}쪽 {kind}"
+        head = lead or f"{name}{josa(name, '은', '는')}"
+        text = (f"{head} {where}{josa(where, '으로', '로')}, 필요한 기운 {hit}{josa(hit, '을', '를')} 채우기 좋습니다." if hit
+                else f"{head} {where}지만 필요한 기운과는 결이 다릅니다.")
         best = place.get("best_months") or []
         if month and best:
-            facts.append(f"{month}월 추천 시기" if month in best else f"추천 시기 {', '.join(map(str, best))}월")
-        return place["name"], facts
+            text += f" {month}월이 이곳을 즐기기 좋은 때입니다." if month in best else \
+                f" 이곳은 {', '.join(map(str, best))}월에 가장 좋습니다."
+        return text
 
     def _summary_claims(self) -> list[Claim]:
         """사주 요약(원국·일간·용신과 그 의미·세운·12개월 흐름)을 사주 계산 결과로 만든다 (LLM 없이)."""
@@ -483,13 +508,14 @@ class SajuPlannerApp:
         year_txt = []
         for y in years:
             hit = [e for e in dict.fromkeys((tools.STEM_ELEMENT[y[0]], tools.BRANCH_ELEMENT[y[1]])) if e in ch["yongsin_elements"]]
-            year_txt.append(f"{y}년" + (f"(용신 {'·'.join(hit)}{josa(hit[-1], '과', '와')} 맞음)" if hit else ""))
+            year_txt.append(f"{y}년" + (f"(필요한 기운 {'·'.join(hit)}{josa(hit[-1], '과', '와')} 맞는 해)" if hit else ""))
         good = [m for m in months if m["good_month"]]
         clash = [m for m in months if m["clash_with_day_branch"]]
-        flow = (f"조회 범위({months[0]['start_date']} ~ {months[-1]['end_date']})의 세운은 {', '.join(year_txt)}입니다. "
-                f"12개 절기 월 중 용신 기운이 들어오는 좋은 달은 {len(good)}개({', '.join(m['month_ganzhi'] + '월' for m in good) or '없음'})이고, "
-                + (f"일지와 충하는 주의 달은 {', '.join(m['month_ganzhi'] + '월' for m in clash)}입니다." if clash
-                   else "일지와 충하는 달은 없습니다."))
+        flow = (f"앞으로 1년({months[0]['start_date']} ~ {months[-1]['end_date']})은 {', '.join(year_txt)}의 흐름에 걸칩니다. "
+                f"12개 절기 월 가운데 {len(good)}개월이 필요한 기운이 들어오는 좋은 달이고, "
+                + (f"조심할 달은 {', '.join(m['month_ganzhi'] + '월(' + m['start_date'] + ' ~ ' + m['end_date'] + ')' for m in clash)}"
+                   f"{'로, 내 기운과 부딪히는(일지 충) 달입니다.' if len(clash) == 1 else '입니다. 모두 내 기운과 부딪히는(일지 충) 달입니다.'}"
+                   if clash else "내 기운과 부딪히는(일지 충) 달은 없습니다."))
         claims.append(Claim(section="사주 요약", text=flow, doc_ids=saju))
         return claims
 
@@ -513,42 +539,39 @@ class SajuPlannerApp:
                 continue
             span = f"{r['ganzhi']}월({r['start_date']} ~ {r['end_date']})"
             match = "·".join(r["month_yongsin_match"])
-            why = [f"그 달 기운이 용신 {match}{josa(match, '과', '와')} 맞습니다." if match
-                   else "그 달 기운에는 용신 오행이 없습니다."]
+            why = [f"그달에는 필요한 기운 {match}{josa(match, '이', '가')} 들어옵니다." if match
+                   else "그달에는 필요한 기운이 들어오지 않습니다."]
             if r["clash_with_day_branch"]:
-                why.append("일지와 충하는 달이라 큰 변화는 신중해야 합니다.")
+                why.append(f"{'다만' if match else '또'} 내 기운과 부딪히는(일지 충) 달이라 큰 일정은 여유 있게 잡으세요.")
             if r.get("place_id"):
-                name, facts = self._place_facts(r["place_id"], plan["month"])
-                why.append(f"{name}{josa(name, '은', '는')} {', '.join(facts)}인 곳입니다.")
+                why.append(self._place_sentence(r["place_id"], plan["month"]))
                 if r["place_id"] in st.contexts:
                     ids.append(r["place_id"])
             elif r.get("province"):
-                why.append(f"{r['province']}{josa(r['province'], '은', '는')} 장소 DB의 한 장소가 아니어서 달의 기운으로 평가했습니다.")
+                why.append(f"{r['province']}{josa(r['province'], '은', '는')} 한 곳의 여행지가 아니라 지역이라 그달의 기운으로 평가했습니다.")
             if plan.get("place") and not r.get("place_id") and not r.get("province"):
                 # DB 에 없는 장소는 평가하지 않는다: 장소 평가를 하지 않았다는 말을 먼저, 등급은 '시기'에 대해서만
                 place_name = plan["place"]
-                text = (f"{label}: {place_name}{josa(place_name, '은', '는')} 추천 장소 DB에 없어 장소 자체는 평가하지 "
-                        f"않았습니다. 시기만 보면 {span}이며 시기 평가는 '{r['rating']}'입니다. " + " ".join(why))
+                text = (f"{label}: {place_name}{josa(place_name, '은', '는')} 추천 여행지 목록에 없어 장소 자체는 평가하지 "
+                        f"않았습니다. 시기만 보면 {span}이고, 시기 평가는 '{r['rating']}'입니다. " + " ".join(why))
             else:
-                text = (f"{label}{josa(what, '은', '는')} {span}에 해당하며 평가는 '{r['rating']}'입니다. "
+                text = (f"{label}{josa(what, '은', '는')} {span}에 해당하고, 평가는 '{r['rating']}'입니다. "
                         + " ".join(why))
             alts = [a for a in r.get("alternatives") or [] if a["id"] in st.contexts][:2]
-            if alts:   # 장소 DB 안의 대안만, 고른 이유와 함께
-                items = [self._place_facts(a["id"], plan["month"]) for a in alts]
-                listed = ", ".join(f"{n}({', '.join(f)})" for n, f in items)
-                last = items[-1][0]
-                text += (f" {r['province']} 안에서는 {listed}{josa(last, '이', '가')} 용신에 맞습니다." if r.get("province")
-                         else f" 대안으로 {listed}{josa(last, '을', '를')} 고려해 보세요.")
+            if alts:   # 추천 여행지 목록 안의 대안만, 고른 이유와 함께
+                lead = f" {r['province']} 안에서 고른다면" if r.get("province") else " 대신"
+                text += lead + " " + " ".join(self._place_sentence(a["id"], plan["month"]) for a in alts)
                 ids += [a["id"] for a in alts]
             if r.get("better_move_months"):
                 months = {m["month_ganzhi"]: m for m in st.chart["months"]}
                 better = [f"{g}월({months[g]['start_date']} ~ {months[g]['end_date']})" for g in r["better_move_months"][:2]]
-                text += f" 이사는 {', '.join(better)}이 더 좋습니다."
+                text += f" 이사는 {', '.join(better)}에 하는 편이 더 좋습니다."
             claims.append(Claim(section="계획 평가", text=text, doc_ids=list(dict.fromkeys(ids))))
         return claims
 
     async def compose(self, s: QueryState) -> QueryState:
         st = self._state()
+        st.emit("compose", "근거를 보강해 답변을 다시 정리하고 있어요" if s.get("attempts") else "전문가 보고를 모아 답변을 정리하고 있어요")
         ctx = "\n".join(f"- {c['doc_id']}: {c['text'][:160].replace(chr(10), ' ')}" for c in st.context_list())
         feedback = ""
         if s.get("violations"):
@@ -568,6 +591,10 @@ class SajuPlannerApp:
                                 "이 장소가 좋다·주의하라고 평가하지 말고, 'DB에 없어 장소는 평가하지 않는다'를 먼저 밝힌 뒤 "
                                 "시기(그 달의 기운)와 DB 안의 대안만 말한다. '조회 범위 밖'은 날짜에만 쓰는 말이므로 장소에 쓰지 않는다. "
                                 "다른 달을 권할 때는 양력 월 숫자를 지어내지 말고 사주 요약에 적힌 간지월과 기간을 쓴다.")
+        if s.get("prior_answer"):
+            travel_note += ("\n24. 대화의 이어 묻기다. 아래 [직전 답변 요약]에서 이미 말한 해석·추천은 되풀이하지 말고, "
+                            "'(이어서 묻는 말)'에 새로 물은 것에 집중한다. 같은 사실이 꼭 필요하면 한 문장으로만 짚는다.\n"
+                            f"[직전 답변 요약]\n{s['prior_answer']}")
         prompt = COMPOSE_PROMPT.format(feedback=feedback, question=s["masked"], contexts=ctx or "(없음)",
                                        reports=s.get("reports", ""), travel_note=travel_note)
         answer = await self.composer.ainvoke(prompt, {"callbacks": [TraceCallback(st)]})
@@ -594,11 +621,11 @@ class SajuPlannerApp:
             if not plan.get("place") or r.get("place_id") or r.get("province") or r.get("rating") is None:
                 continue
             place = plan["place"]
-            text = (f"{place}{josa(place, '은', '는')} 추천 장소 DB에 없어 장소 자체는 평가하지 않았습니다. "
+            text = (f"{place}{josa(place, '은', '는')} 추천 여행지 목록에 없어 장소 자체는 평가하지 않았습니다. "
                     f"{plan['month']}월이라는 시기만 보면 '{r['rating']}'입니다.")
             alts = [a["name"] for a in r.get("alternatives") or [] if a["id"] in st.contexts][:2]
             if alts:
-                text += f" 같은 시기에는 {', '.join(alts)}처럼 DB 안의 여행지가 잘 맞습니다."
+                text += f" 같은 시기라면 {', '.join(alts)}처럼 목록에 있는 여행지가 잘 맞습니다."
             ids = [d for d in ("mcp:saju", "tool:evaluate_plan") if d in st.contexts]
             ids += [a["id"] for a in r.get("alternatives") or [] if a["id"] in st.contexts][:2]
             return Claim(section="한눈에 보기", text=text, doc_ids=ids)
@@ -641,6 +668,25 @@ class SajuPlannerApp:
         out += guards.output_violations(c.text)
         return out
 
+    @staticmethod
+    def _repair_citations(answer: StructuredAnswer, known: set[str]) -> int:
+        """근거는 contexts 에 있는데 doc_id 만 빠진 경우 코드가 붙인다 (LLM 재생성 대신, 결정론).
+
+        - 간지·기간을 말하는데 mcp:saju 가 없으면 → mcp:saju
+        - DB 장소 이름을 말하는데 그 장소 id 가 없으면 → 장소 id (도구가 돌려준 장소만, 즉 contexts 에 있을 때만)
+        근거가 contexts 에 없는 경우와 금칙어·용신 오기 같은 내용 위반은 그대로 검사에 걸린다.
+        """
+        added = 0
+        for c in answer.claims:
+            need = []
+            if "mcp:saju" in known and "mcp:saju" not in c.doc_ids and (GANZHI_CHARS & set(c.text) or DATE_RE.search(c.text)):
+                need.append("mcp:saju")
+            need += [p["id"] for p in tools.find_places(c.text) if p["id"] in known and p["id"] not in c.doc_ids]
+            if need:
+                c.doc_ids = list(dict.fromkeys(c.doc_ids + need))
+                added += len(need)
+        return added
+
     def _repair_month_ranges(self, answer: StructuredAnswer) -> int:
         """'간지월(날짜~날짜)' 표기의 날짜를 사주 요약 값으로 교정한다. 교정한 건수를 돌려준다."""
         chart = self._state().chart
@@ -662,6 +708,7 @@ class SajuPlannerApp:
 
     async def guard_output(self, s: QueryState) -> QueryState:
         st = self._state()
+        st.emit("validate", "근거와 표현을 검증하고 있어요")
         fixed = self._repair_month_ranges(s["answer"])
         if fixed:
             st.add_step("guard:output", "month_range_repair", f"fixed={fixed}", type="guard", name="month_range_repair")
@@ -669,6 +716,9 @@ class SajuPlannerApp:
         if stripped:
             st.add_step("guard:output", "doc_tag_strip", f"stripped={stripped}", type="guard", name="doc_tag_strip")
         known = set(st.contexts)
+        cited = self._repair_citations(s["answer"], known)
+        if cited:
+            st.add_step("guard:output", "citation_repair", f"added={cited}", type="guard", name="citation_repair")
         bad = {}
         for i, c in enumerate(s["answer"].claims):
             v = self._claim_violations(c, known)
@@ -717,10 +767,13 @@ class SajuPlannerApp:
         if not cited:
             return None
         titles = [f"「{st.contexts[d]['text'].splitlines()[0].strip()}」" for d in cited]
-        return Claim(section="근거 자료", text=f"해석 근거: 명리 해설 문서 {', '.join(titles)} (교육용으로 작성한 자료)",
+        more = f" 외 {len(titles) - 3}건" if len(titles) > 3 else ""
+        return Claim(section="근거 자료",
+                     text=f"해석 근거는 명리 해설 문서 {', '.join(titles[:3])}{more}입니다(교육용으로 직접 작성한 자료).",
                      doc_ids=cited)
 
     async def finalize(self, s: QueryState) -> QueryState:
+        self._state().emit("finalize", "월별 표와 용어 풀이를 붙여 답변을 완성하고 있어요")
         extra = [guards.REFUSAL_MESSAGES[c] for c in s["decision"].partial_categories] if s.get("decision") else []
         claims = list(s["answer"].claims)
         travel = self._travel_claims()
@@ -775,7 +828,12 @@ class SajuPlannerApp:
             claims.append(source)
         claims = self._check_code_claims(claims, {id(c) for c in s["answer"].claims})
         # 검증은 한자 원문으로 마쳤으므로, 보여 주기 직전에 간지·오행을 '한글(한자)'로 바꾼다
+        llm_ids = {id(c) for c in s["answer"].claims}
+        origins = ["llm" if id(c) in llm_ids else "code" for c in claims]
         claims = [c.model_copy(update={"text": annotate(c.text)}) for c in claims]
+        st = self._state()
+        st.final_claims = [{"section": c.section, "text": c.text, "origin": o} for c, o in zip(claims, origins)]
+        st.final_extra = list(extra)
         return {"final": render_answer(StructuredAnswer(claims=claims), extra=extra, disclaimer=guards.DISCLAIMER)}
 
     def _check_code_claims(self, claims: list[Claim], llm_ids: set[int]) -> list[Claim]:
@@ -797,16 +855,32 @@ class SajuPlannerApp:
 
     # ---- 진입점 ----
     async def run_query(self, question: str) -> dict:
+        """POST /query: 상태 없는 한 번의 질의 (과정 규약)."""
+        result, _ = await self.run_turn(question)
+        return result
+
+    async def run_turn(self, question: str, preset_chart: dict | None = None,
+                       exclude_ids: list[str] | None = None,
+                       prior_answer: str | None = None,
+                       listener=None) -> tuple[dict, RequestState]:
+        """한 턴을 실행하고 응답과 요청 상태를 함께 돌려준다 (/chat 이 사주 요약·보여 준 장소를 기억하는 데 쓴다)."""
         st = start_request()
+        st.listener = listener   # 스트리밍 API 일 때만 진행 알림을 보낸다
+        st.exclude_ids = list(exclude_ids or [])
+        inputs = {"question": question}
+        if preset_chart:
+            inputs["preset_chart"] = preset_chart
+        if prior_answer:
+            inputs["prior_answer"] = prior_answer
         try:
-            out = await self.graph.ainvoke({"question": question}, {"recursion_limit": 60})
+            out = await self.graph.ainvoke(inputs, {"recursion_limit": 60})
         except (asyncio.TimeoutError, TimeoutError, ReadTimeoutError) as e:
             st.add_step("error", type(e).__name__, ERROR_MESSAGE, type="error", name="timeout")
             out = {"response": ERROR_MESSAGE}
         answer = out.get("response") or out.get("final") or ""
         contexts = [] if out.get("response") else st.context_list()
-        return {"answer": answer, "contexts": contexts, "trace": st.trace,
-                "total_latency_ms": st.total_latency_ms, "reference_date": config.REFERENCE_DATE}
+        return ({"answer": answer, "contexts": contexts, "trace": st.trace,
+                 "total_latency_ms": st.total_latency_ms, "reference_date": config.REFERENCE_DATE}, st)
 
     async def close(self) -> None:
         await self.hub.close()

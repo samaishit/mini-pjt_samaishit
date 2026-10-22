@@ -10,7 +10,7 @@ import contextvars
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -61,6 +61,12 @@ class RequestState:
     plan_results: list[dict] = field(default_factory=list)    # evaluate_plan 결과 (계획 평가 문장은 코드가 만든다)
     route: list[str] = field(default_factory=list)            # 의도 라우터가 고른 필수 에이전트
     date_spans: list[dict] = field(default_factory=list)      # 질문의 날짜 구간을 절기 월로 나눈 결과
+    travel_scope: str | None = None                          # 질문(이어 묻기면 이번 말)이 정한 국내/해외 범위
+    exclude_ids: list[str] = field(default_factory=list)     # 대화에서 이미 보여 준 장소 (다른 곳 요청 시 제외)
+    final_claims: list[dict] = field(default_factory=list)   # 최종 문장 [{section, text, origin}] (대화 탭 필터용)
+    final_extra: list[str] = field(default_factory=list)     # 부분 거절 문구
+    # 스트리밍 API 의 진행 리스너 listener(kind, data). 없으면(기존 /query·/chat) 아무것도 보내지 않는다
+    listener: Callable[[str, dict], None] | None = field(default=None, repr=False)
     residence: dict | None = None                             # recommend_residence 결과 (주거 Top 3·이사 시기 문장은 코드가 만든다)
     started: float = field(default_factory=time.perf_counter)
 
@@ -74,6 +80,18 @@ class RequestState:
         if latency_ms is not None:
             entry["latency_ms"] = latency_ms
         self.trace.append(entry)
+        self._notify("step", entry)
+
+    def emit(self, stage: str, label: str, **extra: Any) -> None:
+        """스트리밍 화면용 단계 알림 (trace 에는 남기지 않는다)."""
+        self._notify("stage", {"stage": stage, "label": label, **extra})
+
+    def _notify(self, kind: str, data: dict) -> None:
+        if self.listener is not None:
+            try:
+                self.listener(kind, data)
+            except Exception:   # 진행 알림 실패가 답변 생성을 막지 않게 한다
+                pass
 
     def add_context(self, doc_id: str, text: str, source: str, doc_type: str) -> None:
         text = mask_text(text)

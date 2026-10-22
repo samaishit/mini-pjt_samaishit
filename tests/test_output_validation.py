@@ -72,6 +72,21 @@ class TestRepairAndDrop(unittest.TestCase):
         self.assertEqual(self.app._repair_month_ranges(ans), 1)
         self.assertIn("己亥월(2026-11-07 ~ 2026-12-06)", ans.claims[0].text)
 
+    def test_missing_citations_repaired_without_regeneration(self):
+        st = make_state()   # contexts: mcp:saju, rule:yongsin:overview, T-OS-KYOTO
+        ans = StructuredAnswer(claims=[
+            Claim(section="한눈에 보기", text="5월에는 일본 교토가 잘 맞습니다.", doc_ids=[]),
+            Claim(section="사주 해석", text="병화(丙火) 기운이 들어오는 달입니다.", doc_ids=["rule:yongsin:overview"]),
+            Claim(section="한눈에 보기", text="삿포로도 좋습니다.", doc_ids=[]),   # 도구가 돌려주지 않은 장소는 보정하지 않는다
+        ])
+        known = set(st.contexts)
+        self.assertEqual(self.app._repair_citations(ans, known), 2)
+        self.assertEqual(ans.claims[0].doc_ids, ["T-OS-KYOTO"])
+        self.assertEqual(ans.claims[1].doc_ids, ["rule:yongsin:overview", "mcp:saju"])
+        self.assertEqual(ans.claims[2].doc_ids, [])
+        self.assertEqual(self.app._claim_violations(ans.claims[0], known), [])
+        self.assertEqual(self.app._claim_violations(ans.claims[1], known), [])
+
     def test_violating_claim_removed_after_regeneration(self):
         make_state()
         ans = StructuredAnswer(claims=[
@@ -120,10 +135,10 @@ class TestDeterministicClaims(unittest.TestCase):
                             "alternatives": [{"id": "T-OS-KYOTO", "name": "일본 교토"}], "basis": "rule:travel:plan-rating",
                             "plan": {"kind": "travel", "month": 11, "place": "남극", "year": 2026}}]
         plan_text = self.app._plan_claims()[0].text
-        self.assertTrue(plan_text.startswith("2026년 11월 남극 여행: 남극은 추천 장소 DB에 없어 장소 자체는 평가하지 않았습니다."))
+        self.assertTrue(plan_text.startswith("2026년 11월 남극 여행: 남극은 추천 여행지 목록에 없어 장소 자체는 평가하지 않았습니다."))
         self.assertIn("시기 평가는 '주의'", plan_text)
         head = self.app._unknown_place_headline()
-        self.assertTrue(head.text.startswith("남극은 추천 장소 DB에 없어 장소 자체는 평가하지 않았습니다. 11월이라는 시기만 보면 '주의'"))
+        self.assertTrue(head.text.startswith("남극은 추천 여행지 목록에 없어 장소 자체는 평가하지 않았습니다. 11월이라는 시기만 보면 '주의'"))
         self.assertIn("일본 교토", head.text)
         self.assertEqual(self.app._claim_violations(head, set(st.contexts)), [])
 
@@ -139,8 +154,10 @@ class TestDeterministicClaims(unittest.TestCase):
         st.travel_picks = {2: {"overseas": {"pick": {"id": "T-OS-KYOTO", "name": "일본 교토", "direction": "동",
                                                      "elements": ["木", "土"], "score_breakdown": {"direction": 1}}}}}
         claims = self.app._travel_claims()
-        self.assertIn("용신이 火·水·木", claims[0].text)
-        self.assertIn("일본 교토(동쪽, 용신 木 기운·용신 방위, 대나무숲·사찰 정원)를 추천합니다", claims[1].text)
+        self.assertIn("필요한 기운(용신)이 火·水·木이라", claims[0].text)
+        self.assertIn("己亥월(2026-11-07 ~ 2026-12-06)에는 해외 일본 교토를 추천합니다. 이곳은 대나무숲·사찰 정원이 있는 "
+                      "동쪽 여행지로, 필요한 기운 木을 채우기 좋습니다.", claims[1].text)
+        self.assertNotIn("DB", " ".join(c.text for c in claims))   # 시스템 용어를 사용자에게 보이지 않는다
         # 코드가 만든 문장도 LLM 문장과 같은 근거 검사를 통과해야 한다
         for c in claims:
             self.assertEqual(self.app._claim_violations(c, set(st.contexts)), [], c.text)
@@ -184,7 +201,7 @@ class TestDeterministicClaims(unittest.TestCase):
         st.residence = {"top3": [{"id": "R-SEOUL-JONGNO", "name": "서울 종로구", "direction": "북", "elements": ["土", "木"]}],
                         "good": ["己亥"], "avoid": []}
         claims = self.app._residence_claims()
-        self.assertIn("1위 서울 종로구: 북 방위에 용신 木 기운이 있고", claims[0].text)
+        self.assertEqual(claims[0].text, "1위 서울 종로구는 역사 도심·궁궐이 있는 북쪽 지역으로, 필요한 기운 木을 채우기 좋습니다.")
         self.assertIn("己亥월(2026-11-07 ~ 2026-12-06)", claims[1].text)
         for c in claims:
             self.assertEqual(self.app._claim_violations(c, set(st.contexts)), [], c.text)
@@ -244,7 +261,7 @@ class TestSummaryAndReasons(unittest.TestCase):
         self.assertIn("원국(타고난 사주 바탕)은 연주 庚申, 월주 己丑, 일주 丙申, 시주 壬辰입니다. '나'를 뜻하는 일간은 丙火", texts[0])
         self.assertIn("용신은 壬水, 己土입니다", texts[1])
         self.assertIn("水는 북쪽·겨울, 바다·강·호수처럼 물이 있는 곳", texts[1])
-        self.assertIn("좋은 달은 1개(己亥월)", texts[2])
+        self.assertIn("12개 절기 월 가운데 1개월이 필요한 기운이 들어오는 좋은 달", texts[2])
         for c in self.app._summary_claims():
             self.assertEqual(self.app._claim_violations(c, set(st.contexts)), [], c.text)
 
@@ -286,7 +303,8 @@ class TestSummaryAndReasons(unittest.TestCase):
                             "plan": {"kind": "travel", "month": 10, "place": "강원도", "year": 2026, "activity": "캠핑"}}]
         text = self.app._plan_claims()[0].text
         self.assertTrue(text.startswith("2026년 10월 강원도 캠핑은 己亥월"))
-        self.assertIn("강원도 안에서는 춘천(북동쪽, 호수·남이섬·소양강, 용신 水 기운, 10월 추천 시기)이 용신에 맞습니다", text)
+        self.assertIn("강원도 안에서 고른다면 춘천은 호수·남이섬이 있는 북동쪽 여행지로, 필요한 기운 水를 채우기 좋습니다. "
+                      "10월이 이곳을 즐기기 좋은 때입니다.", text)
 
 
 class TestSupervisorHandoff(unittest.TestCase):

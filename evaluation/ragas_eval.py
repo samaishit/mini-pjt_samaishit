@@ -32,6 +32,7 @@ MODEL = os.getenv("JUDGE_MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
 # Bedrock 스로틀링으로 작업이 시간 초과되지 않도록 동시 실행을 줄이고 제한 시간을 늘린다
 RUN_CONFIG = RunConfig(timeout=600, max_workers=4, max_retries=10, max_wait=90)
 METRICS = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+RAGAS_MAX_TOKENS = 16000
 MIN_VALID_SHARE = 0.75   # 유효 행이 대상의 75% 미만이면 '측정 불가'로 보고한다 (평균·라운드 비교 없음)
 
 
@@ -46,6 +47,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--round", type=int, required=True)
     parser.add_argument("--ids", help="쉼표로 구분한 id (점검용, 결과 파일·리포트는 쓰지 않음)")
+    parser.add_argument("--metrics", help="일부 지표만 다시 계산해 기존 결과에 합친다 (예: faithfulness)")
     args = parser.parse_args()
     wanted = set(args.ids.split(",")) if args.ids else None
 
@@ -70,17 +72,25 @@ def main():
         ))
         ids.append(cid)
 
-    llm = LangchainLLMWrapper(ChatBedrockConverse(model=MODEL, region_name="us-east-1", temperature=0, max_tokens=4096))
+    # faithfulness 는 답변 문장마다 근거 판정을 JSON 으로 쓰므로, 답변이 길면 출력이 잘려 파싱에 실패한다 → 상한을 넉넉히
+    llm = LangchainLLMWrapper(ChatBedrockConverse(model=MODEL, region_name="us-east-1", temperature=0,
+                                                  max_tokens=RAGAS_MAX_TOKENS))
     emb = LangchainEmbeddingsWrapper(BedrockEmbeddings(model_id="amazon.titan-embed-text-v2:0", region_name="us-east-1"))
+    all_metrics = {"faithfulness": faithfulness, "answer_relevancy": answer_relevancy,
+                   "context_precision": context_precision, "context_recall": context_recall}
+    run_metrics = [m.strip() for m in args.metrics.split(",")] if args.metrics else METRICS
     result = evaluate(EvaluationDataset(samples=samples),
-                      metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+                      metrics=[all_metrics[m] for m in run_metrics],
                       llm=llm, embeddings=emb, run_config=RUN_CONFIG, show_progress=False,
                       raise_exceptions=False)
     df = result.to_pandas()
+    out_path = EVAL_DIR / "runs" / f"round{args.round}_ragas.json"
+    prev = json.loads(out_path.read_text(encoding="utf-8")) if args.metrics and out_path.exists() else {}
     per_row = {}
     for cid, (_, row) in zip(ids, df.iterrows()):
-        per_row[cid] = {m: (None if row[m] is None or (isinstance(row[m], float) and math.isnan(row[m]))
-                            else round(float(row[m]), 3)) for m in METRICS}
+        per_row[cid] = dict((prev.get("per_row") or {}).get(cid, {m: None for m in METRICS}))   # 다시 계산하지 않은 지표는 유지
+        per_row[cid].update({m: (None if row[m] is None or (isinstance(row[m], float) and math.isnan(row[m]))
+                                 else round(float(row[m]), 3)) for m in run_metrics})
     means, valid = {}, {}
     for m in METRICS:
         vals = [v[m] for v in per_row.values() if v[m] is not None]

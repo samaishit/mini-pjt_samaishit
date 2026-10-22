@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CLIENT_TIMEOUT_MS, getExamples, postQuery, type Example, type QueryResponse } from "./api";
 import { composeQuestion, MAX_QUESTION_CHARS, validateBirth, type BirthFields } from "./composer";
 import { BirthForm } from "./components/BirthForm";
+import { ChatView } from "./components/ChatView";
 import { ResultView } from "./components/ResultView";
+import { StreamProgress } from "./components/StreamProgress";
+import { INITIAL_PROGRESS, postQueryStream, reduceProgress, type Progress } from "./stream";
 
 const DEFAULT_BIRTH: BirthFields = {
   year: 1988, month: 11, day: 3, calendar: "solar", leap: false,
@@ -22,6 +25,9 @@ interface Done {
 }
 
 export default function App() {
+  // ?view=chat 으로 열면 대화 탭부터 보여 준다 (링크 공유용)
+  const [view, setView] = useState<"single" | "chat">(
+    () => (new URLSearchParams(window.location.search).get("view") === "chat" ? "chat" : "single"));
   const [mode, setMode] = useState<Mode>("form");
   const [birth, setBirth] = useState<BirthFields>(DEFAULT_BIRTH);
   const [question, setQuestion] = useState("내년 5월에 여행 어디로 가면 좋을까?");
@@ -32,6 +38,7 @@ export default function App() {
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<Done | null>(null);
+  const [progress, setProgress] = useState<Progress>(INITIAL_PROGRESS);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -69,8 +76,11 @@ export default function App() {
     setElapsed(0);
     setError(null);
     setDone(null);
+    setProgress(INITIAL_PROGRESS);
     const started = performance.now();
-    const res = await postQuery(finalQuestion, ctrl.signal);
+    // 스트리밍 API 로 단계 진행을 받으며 기다린다. 스트리밍을 지원하지 않는 서버면 기존 /query 로 다시 요청
+    let res = await postQueryStream(finalQuestion, (e) => setProgress((p) => reduceProgress(p, e)), ctrl.signal);
+    if (!res.ok && (res.status === 404 || res.status === 405)) res = await postQuery(finalQuestion, ctrl.signal);
     window.clearTimeout(timer);
     setLoading(false);
     abortRef.current = null;
@@ -95,7 +105,19 @@ export default function App() {
         </p>
       </header>
 
-      <main className="layout">
+      <nav className="view-tabs" role="tablist" aria-label="화면">
+        <button role="tab" aria-selected={view === "single"} className={view === "single" ? "on" : ""}
+                onClick={() => setView("single")}>단일 질의 <span className="muted small">POST /query</span></button>
+        <button role="tab" aria-selected={view === "chat"} className={view === "chat" ? "on" : ""}
+                onClick={() => setView("chat")}>대화 <span className="muted small">POST /chat · 단기 기억</span></button>
+      </nav>
+
+      {/* 두 화면을 모두 띄워 두고 표시만 바꾼다 (탭을 바꿔도 입력·대화가 남도록) */}
+      <div hidden={view !== "chat"}>
+        <ChatView />
+      </div>
+
+      <main className="layout" hidden={view !== "single"}>
         <section className="panel input-panel">
           <div className="seg mode" role="tablist" aria-label="입력 방식">
             <button role="tab" aria-selected={mode === "form"} className={mode === "form" ? "on" : ""}
@@ -159,11 +181,7 @@ export default function App() {
 
         <section className="panel output-panel">
           {loading && (
-            <div className="waiting" role="status">
-              <div className="spinner" aria-hidden />
-              <p><strong>{(elapsed / 1000).toFixed(0)}초</strong> 경과 · 사주 계산 → 전문 에이전트 → 답변 검증 중입니다.</p>
-              <p className="muted small">보통 15~80초 걸립니다 (1년 전체 계획이 가장 깁니다).</p>
-            </div>
+            <StreamProgress progress={progress} elapsedMs={elapsed} onCancel={() => abortRef.current?.abort()} />
           )}
           {error && <div className="error-box" role="alert">{error}</div>}
           {done && !loading && <ResultView data={done.data} status={done.status} elapsedMs={done.elapsedMs} />}

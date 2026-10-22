@@ -18,27 +18,20 @@
 | 12 | 평가: RAGAS + LLM-as-Judge (Day 7) | 인-아웃 세트 24건 규칙+심사 판정, RAGAS 4지표 ([evaluation/](evaluation)) |
 
 ## 아키텍처
-```
-POST /query {question}
-   │
-   ▼
-guard_input ─ ① 제3자 규칙(원문) ② 출생 정보 파서(<BIRTH> 치환, 되묻기) ③ 규칙 가드 ④ LLM 판별(치환 문장)
-   │   └─ 차단/되묻기 → 고정 문구 응답 (contexts=[])
-   ▼
-saju ─ LLM 없이 사주 MCP 직접 호출: calculate_saju + get_luck_calendar → 사주 요약(mcp:saju)
-   ▼
-supervisor ─ 의도 라우터가 필수 에이전트 지정
-   ├─ saju_agent      : retrieve_rule_docs, element_direction_map
-   ├─ travel_agent    : recommend_travel(→ MCP search_travel), get_travel, retrieve_place_docs
-   ├─ residence_agent : recommend_residence(→ MCP search_regions), get_region, retrieve_place_docs
-   └─ plan_agent      : evaluate_plan(→ MCP search_travel/search_regions)
-   ▼
-compose ─ Bedrock LLM with_structured_output(StructuredAnswer)
-   ▼
-guard_output ─ 절기 월 기간 교정 · doc_id ∈ contexts · 필수 근거(간지→mcp:saju, 장소→장소 id) · 금칙어
-   │   └─ 위반 → compose 1회 재생성 → 그래도 위반이면 해당 문장 제거
-   ▼
-finalize ─ 섹션 렌더링 + 부분 거절 문구 + 면책 문구 → {answer, contexts, trace}
+LangGraph 메인 그래프다. 노드 내부(입력 가드 순서, Supervisor·전문 에이전트, 출력 검증·조립 단계, 한도 초과 대체)는 [docs/architecture.md](docs/architecture.md)에 그렸다.
+
+```mermaid
+flowchart TD
+    START(["POST /query {question}"]) --> GI
+    GI["guard_input<br/>제3자 규칙 → 출생 정보 파서(BIRTH 치환·되묻기) → 입력 가드(규칙 + LLM)"]
+    GI -->|차단·되묻기| FIXED(["고정 문구 응답, contexts = [ ]"])
+    GI -->|통과| SAJU["saju<br/>사주 MCP 직접 호출(LLM 없음) → mcp:saju"]
+    SAJU --> SUP["supervisor<br/>의도 라우터 → 규칙 문서 선검색 → Supervisor + 전문 에이전트 4종<br/>(saju · travel · residence · plan), 누락 시 직접 보완"]
+    SUP --> COMP["compose<br/>Bedrock LLM 구조화 출력 claims"]
+    COMP --> GO["guard_output<br/>기간 교정 · 근거 doc_id · 금칙어 · 용신 오기 검사"]
+    GO -->|"위반 → 1회 재생성"| COMP
+    GO -->|통과 또는 위반 문장 제거| FIN["finalize<br/>도구 결과로 코드 문장 생성(여행 표·주거·계획 평가·사주 요약·용어 풀이)<br/>→ 코드 문장 검사 → 한글(한자) 표기 → 렌더링"]
+    FIN --> OUT(["answer, contexts, trace"])
 ```
 - 장소 선정·이사 길흉월·계획 등급은 **규칙(코드)으로 계산**하고 LLM은 설명만 한다 (기준은 [data/rules](data/rules)에 문서화).
 - 기준일은 `2026-10-21`로 고정(재현성). 환경 변수 `SAJU_REFERENCE_DATE`로만 변경. 12개월 범위 = 戊戌월(2026-10-08) ~ 己酉월(2027-10-07).
@@ -77,7 +70,11 @@ uv venv --python 3.12 .venv-eval && uv pip install --python .venv-eval/Scripts/p
 - **한도 초과 자동 대체**: 답변 LLM 호출이 스로틀링(`ThrottlingException` 등)으로 실패하면 `global.anthropic.claude-sonnet-4-5-20250929-v1:0` → `us.anthropic.claude-sonnet-4-6` 순서로 모델을 바꿔 같은 요청을 다시 보낸다 ([src/llm.py](src/llm.py), 순서는 `SAJU_LLM_FALLBACKS`로 변경). 대체가 일어나면 trace 에 `llm:fallback` 단계가 남고, 모두 실패하면 503 응답의 `error_type` 에 오류 종류가 담긴다. 심사 모델(`JUDGE_MODEL`)은 라운드 비교를 위해 대체하지 않는다.
 
 ## 웹 테스트 화면 ([web/](web))
-`POST /query` 를 호출하는 React 테스트 화면이다. API 계약은 그대로이고, 빌드 결과(`web/dist`)를 FastAPI 가 `/` 에서 함께 서빙한다.
+React 테스트 화면이다. 빌드 결과(`web/dist`)를 FastAPI 가 `/` 에서 함께 서빙한다. 탭이 두 개다.
+- **단일 질의 탭** (`POST /query`): 과정 규약 그대로 상태 없는 한 번의 질의.
+- **대화 탭** (`POST /chat`, 단기 기억): 첫 메시지에서 계산한 사주 요약과 앞 질문을 세션(1시간) 동안 기억해, 두 번째 질문부터는 출생 정보 없이 이어 묻는다 (예: "내년 5월 국내 여행지?" → "그럼 해외는?" → "다른 곳도 알려줘"). 이어 묻는 말의 달·계절·국내/해외를 우선하고, '다른 곳' 요청이면 이미 보여 준 장소를 뺀다. 서버는 원본 생년월일을 저장하지 않고 `<BIRTH>` 로 가린 질문과 계산된 사주 요약만 기억하며, '새 대화'(`DELETE /chat/{session_id}`)로 바로 지운다. 두 번째 턴부터는 **답변 필터**가 이미 보여 준 문장(사주 요약·용어 풀이 등)을 접고 이번 질문 범위의 섹션만 펼친다. 접은 내용은 답변 아래 '접은 내용 펼치기'로 볼 수 있고, '다시·전체·정리'라고 하면 전체를 보여 준다(예: "그럼 해외는?" 답변 1,636자 → 326자). 흐름도는 [docs/architecture.md](docs/architecture.md) 6장.
+
+단일 질의 탭의 기능:
 - **폼 입력**: 생년월일·양/음력·윤달·출생 시각(모름)·성별과 질문을 받아 서버 파서가 읽는 문장으로 조립해 보낸다 (예: `양력 1988년 11월 3일 오전 7시 출생 남성입니다. 내년 5월에 여행 어디로 가면 좋을까?`). 조립 형식은 `web/src/composer.cases.json` 으로 vitest 와 `tests/test_web_composer.py`(서버 파서)가 함께 검증한다.
 - **직접 입력 / 예시 질문**: 문장을 통째로 쓰거나 평가셋 24건(`GET /examples`)에서 골라 파서 되묻기·가드레일을 시험한다.
 - **결과**: 답변(마크다운)과 응답 종류(답변·거절·되묻기), 경과 시간, **처리 과정** 탭(trace 단계·지연 시간·마스킹된 입출력), **근거** 탭(contexts 의 doc_id·종류·본문).
@@ -86,18 +83,18 @@ uv venv --python 3.12 .venv-eval && uv pip install --python .venv-eval/Scripts/p
 
 ## RAGAS 평가 결과
 2차 최종 실행 기준, guardrail 을 뺀 16건 중 contexts 가 있는 14건 평균(되묻기 응답 10·11 제외). 평가 LLM Sonnet 4.5, 임베딩 Titan v2. 괄호는 1차 값.
-- context_recall: **0.869** (0.822)
-- context_precision: **0.728** (0.835)
-- faithfulness: **0.619** (0.519)
-- answer_relevancy: **0.241** (0.214)
+- context_recall: **0.905** (0.822)
+- context_precision: **0.602** (0.835)
+- answer_relevancy: **0.265** (0.214)
+- faithfulness: **측정 보류** (0.519) — 2차 계산 중 Sonnet 4.5 일일 토큰 한도가 소진돼 유효 4/14. 유효 행 75% 미만이면 평균을 내지 않는 규칙에 따라 보류했고, 한도가 풀리면 `ragas_eval.py --round 2 --metrics faithfulness` 로 다시 계산한다.
 
-해석과 행별 값은 [evaluation/round2_report.md](evaluation/round2_report.md). faithfulness 는 월별 여행·주거·계획 문장을 도구 결과로 코드가 만들면서 올랐고, context_precision 은 여행·계획·주거 경로에도 규칙 문서를 미리 넣으면서 내려갔다. answer_relevancy 는 여러 섹션으로 된 긴 답변 구조 때문에 낮다.
+해석과 행별 값은 [evaluation/round2_report.md](evaluation/round2_report.md). answer_relevancy 는 결론을 맨 앞에 둔 '한눈에 보기'로 올랐고, context_precision 은 사주 요약·용어 풀이 근거 문서를 contexts 에 더하면서 내려갔다.
 
 ## 인-아웃 세트 통과율 (자체 평가)
 답변 Claude Haiku 4.5(Sonnet 일일 한도로 `SAJU_LLM_MODEL` 사용), 심사 Claude Sonnet 4.5(temperature 0) — 두 차수 같은 조건.
 - 1차 (Day 8): 19 / 24 통과 (guardrail 8/8, 실패 1·5·6·8·13)
-- 2차 (Day 9 개선 후): **24 / 24 통과** (guardrail 8/8) — 최종 코드로 돌린 마지막 실행. 중간 실행 이력(22/24 두 번, 24/24 한 번)은 2차 리포트에 그대로 남겼다.
-- 개선폭: +5건 (79% → 100%), 최대 응답 시간 121s → 80s
+- 2차 (Day 9 개선 후): **24 / 24 통과** (guardrail 8/8) — 최종 코드로 돌린 마지막 실행(10-22 14:36). 1행은 심사 호출이 한도 초과로 판정되지 않아 같은 답변을 다시 심사했다(judge 5). 중간 실행 8건(22/24 두 번, 23/24 한 번, 24/24 다섯 번)은 실행 시각·바뀐 점과 함께 2차 리포트에 그대로 남겼다.
+- 개선폭: +5건 (79% → 100%), 응답 시간 평균 15.7s → 12.3s, 최대 121s → 52s
 
 ## 트라이앤에러 회고
 - **사주 MCP 선정**: OpenFate bazi-mcp는 세운·월운 도구가 없고, molpass/mcp-saju는 기준일을 받지 않아 2027년 월운을 못 구했다 → 포크해 `now`와 절기 경계를 스캔하는 `get_luck_calendar`를 추가. 정오 판정으로는 입동(11-07 오후)이 하루 밀려 23:59 KST 판정으로 바꿨다.
@@ -111,6 +108,7 @@ uv venv --python 3.12 .venv-eval && uv pip install --python .venv-eval/Scripts/p
 - **검색 가중치**: 감으로 정한 0.5/0.5 대신 규칙 문서 질문 30개로 가중치를 비교(`evaluation/retrieval_sweep.py`) → 0.2/0.8 채택(MRR@3 0.428→0.494). 벡터 단독이 MRR 은 더 높았지만 과정 요구인 하이브리드를 유지.
 - **LLM 이 다시 쓰면 틀린다**: 계획 평가 도구는 '12월=庚子월, 보통'을 정확히 냈는데 작성 LLM 이 요약하며 매핑을 빠뜨렸고, 절기 월 번호 [8, 9, 10]을 '8월~10월'로, 11월 5~10일을 엉뚱한 절기 월로 옮겼다 → 도구 결과에서 바로 나오는 문장(월별 여행 표, 주거 Top 3·이사 시기, 계획 평가, 날짜 구간 분할)은 코드가 만들고 LLM 은 요약만 쓰게 바꿨다. 코드 문장도 같은 근거 검사를 거친다.
 - **Supervisor 반복 넘기기**: 1년 계획 질문에서 Supervisor 가 넘기기 3개를 동시에 호출 → 하나만 실행되고 같은 넘기기를 8번 넘게 반복해 107~180초(한 번 타임아웃). Bedrock 은 병렬 도구 호출 끄기를 지원하지 않아 `post_model_hook`으로 '아직 보고하지 않은 에이전트 하나'만 남기고, 누락 보완은 동시 실행 → 70~80초.
+- **느린 응답의 진짜 원인은 재생성**: trace 를 모아 보니 답변 작성(compose)이 질문당 1.6회 호출됐다. 16건 중 10건이 출력 검증에 걸려 재생성됐고, 그중 8건은 재생성 뒤에도 같은 위반이라 결국 문장이 지워졌다. 위반 사유를 찍어 보니 전부 내용 오류가 아니라 "장소·간지를 말하면서 doc_id 를 빠뜨린" 인용 누락이었다 → 근거가 contexts 에 있으면 코드가 doc_id 를 붙이는 인용 보정을 넣고(근거 없는 doc_id·금칙어·용신 오기만 재생성), 사주 에이전트가 이미 받은 규칙 문서를 다시 검색하지 않게 하고, 에이전트 보고·작성 출력 길이에 상한을 뒀다. 같은 질문 기준 26.8→17.0초, 18.1→11.0초, 23.8→14.7초.
 - **경계 행의 흔들림**: 한 번 심사 방식이라 같은 코드에서도 실행마다 4·7·14행이 번갈아 실패했다 → 실패 원인을 행마다 고친 뒤 최종 코드로 다시 돌린 결과만 보고하고, 중간 실행은 접미사(`_draft`, `_rerunN`)로 남겼다.
 
 ## 핵심 코드 위치

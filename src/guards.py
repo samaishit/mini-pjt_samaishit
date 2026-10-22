@@ -133,7 +133,16 @@ def llm_check(masked_text: str) -> InputCheck:
     if _checker is None:
         from src.llm import make_llm   # 한도 초과 시 대체 모델로 넘어간다
         _checker = make_llm(max_tokens=1024).with_structured_output(InputCheck)
-    return _checker.invoke(LLM_CHECK_PROMPT.format(text=masked_text))
+    import time
+    started = time.perf_counter()
+    out = _checker.invoke(LLM_CHECK_PROMPT.format(text=masked_text))
+    try:   # 입력 가드 LLM 시간도 trace 에 남긴다 (치환된 문장만 보냈음)
+        from src.tracing import current
+        current().add_step("llm:input_guard", "(치환 문장)", f"category={out.category}", type="llm", name="input_guard",
+                           latency_ms=int((time.perf_counter() - started) * 1000))
+    except Exception:
+        pass
+    return out
 
 
 def input_guard(masked_text: str, has_birth: bool, use_llm: bool = True) -> GuardDecision:
