@@ -160,6 +160,15 @@ class TestDeterministicClaims(unittest.TestCase):
         self.assertTrue(SOLAR_MONTH_RE.search("8월부터 10월까지 세 달이 좋습니다"))
         self.assertFalse(SOLAR_MONTH_RE.search("乙巳월(2027-05-06 ~ 2027-06-05)"))
 
+    def test_failing_code_claim_dropped_at_runtime(self):
+        st = make_state()
+        llm = Claim(section="안내", text="참고용 안내입니다.", doc_ids=[])
+        bad = Claim(section="여행 추천", text="일본 교토를 추천합니다.", doc_ids=["rule:nope:x"])   # 코드 문장이 근거 위반
+        kept = self.app._check_code_claims([llm, bad], {id(llm)})
+        self.assertEqual(kept, [llm])
+        step = [t for t in st.trace if t.get("name") == "code_claim_check"][-1]
+        self.assertTrue(step["output"].startswith("dropped=1"))
+
     def v_guess(self, text):
         st = make_state()
         return any("출생" in x for x in self.app._claim_violations(Claim(section="사주 요약", text=text, doc_ids=["mcp:saju"]),

@@ -562,7 +562,25 @@ class SajuPlannerApp:
         source = self._source_claim(claims)
         if source:
             claims.append(source)
+        claims = self._check_code_claims(claims, {id(c) for c in s["answer"].claims})
         return {"final": render_answer(StructuredAnswer(claims=claims), extra=extra, disclaimer=guards.DISCLAIMER)}
+
+    def _check_code_claims(self, claims: list[Claim], llm_ids: set[int]) -> list[Claim]:
+        """코드가 만든 문장도 LLM 문장과 같은 근거 검사를 거친다. 위반 문장은 빼고 trace 에 남긴다.
+
+        LLM 문장은 guard_output 에서 이미 검사·재생성했으므로 여기서는 코드가 붙인 문장만 본다.
+        """
+        st = self._state()
+        known = set(st.contexts)
+        kept, dropped = [], []
+        for c in claims:
+            if id(c) not in llm_ids and self._claim_violations(c, known):
+                dropped.append(c.text[:40])
+                continue
+            kept.append(c)
+        st.add_step("guard:output", f"code_claims={len(claims) - len(llm_ids & set(map(id, claims)))}",
+                    f"dropped={len(dropped)}" + (f" {dropped}" if dropped else ""), type="guard", name="code_claim_check")
+        return kept
 
     # ---- 진입점 ----
     async def run_query(self, question: str) -> dict:
