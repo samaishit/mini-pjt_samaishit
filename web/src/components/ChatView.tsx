@@ -6,6 +6,7 @@ import { BirthForm } from "./BirthForm";
 import { ResultView } from "./ResultView";
 import { StreamProgress } from "./StreamProgress";
 import { INITIAL_PROGRESS, postChatStream, reduceProgress, type Progress } from "../stream";
+import { useFitHeight } from "../useFitHeight";
 
 interface UserMsg {
   role: "user";
@@ -47,30 +48,8 @@ export function ChatView() {
   const listRef = useRef<HTMLDivElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
 
-  // 대화 영역이 화면 아래까지 딱 맞게: 실제 시작 위치를 재서 남은 높이를 채운다 (페이지 전체 스크롤 없이)
-  useEffect(() => {
-    const box = boxRef.current;
-    if (!box) return;
-    const fit = () => {
-      if (window.innerWidth <= 860) {   // 좁은 화면은 위아래로 쌓으므로 고정 높이를 쓰지 않는다
-        box.style.removeProperty("--chat-h");
-        return;
-      }
-      const top = box.getBoundingClientRect().top + window.scrollY;
-      const page = box.closest(".page");
-      const pad = page ? parseFloat(getComputedStyle(page).paddingBottom) || 0 : 0;   // 페이지 아래 여백까지 빼야 전체 스크롤이 안 생긴다
-      if (top > 0) box.style.setProperty("--chat-h", `${Math.max(520, Math.floor(window.innerHeight - top - pad))}px`);
-    };
-    fit();
-    // 탭이 보이게 될 때(크기 변화)도 다시 잰다. ResizeObserver 가 없는 환경(테스트 등)은 창 크기 변화만 본다
-    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
-    ro?.observe(box);
-    window.addEventListener("resize", fit);
-    return () => {
-      ro?.disconnect();
-      window.removeEventListener("resize", fit);
-    };
-  }, []);
+  // 대화 영역이 화면 아래까지 딱 맞게 (단일 질의 탭과 같은 방식)
+  useFitHeight(boxRef, "--fit-h");
 
   const hasChart = !!session?.has_chart;
   // 사주 요약을 아직 기억하지 않았을 때만 출생 정보를 첫 메시지에 붙인다
@@ -167,7 +146,7 @@ export function ChatView() {
         )}
       </article>
 
-      <article className="panel thread">
+      <article className={`panel thread${messages.length ? "" : " watermark"}`}>
         <div className="messages" aria-live="polite" ref={listRef}>
           {!messages.length && (
             <div className="placeholder muted">

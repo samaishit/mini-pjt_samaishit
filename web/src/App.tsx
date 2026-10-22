@@ -7,6 +7,7 @@ import { ResultView } from "./components/ResultView";
 import { StreamProgress } from "./components/StreamProgress";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { INITIAL_PROGRESS, postQueryStream, reduceProgress, type Progress } from "./stream";
+import { useFitHeight } from "./useFitHeight";
 
 const DEFAULT_BIRTH: BirthFields = {
   year: 1988, month: 11, day: 3, calendar: "solar", leap: false,
@@ -41,6 +42,16 @@ export default function App() {
   const [done, setDone] = useState<Done | null>(null);
   const [progress, setProgress] = useState<Progress>(INITIAL_PROGRESS);
   const abortRef = useRef<AbortController | null>(null);
+  const layoutRef = useRef<HTMLElement | null>(null);
+  const outputRef = useRef<HTMLElement | null>(null);
+
+  // 입력·답변 패널을 화면 아래 끝까지 같은 높이로 (대화 탭과 같은 방식), 긴 답변은 패널 안에서 스크롤
+  useFitHeight(layoutRef, "--fit-h");
+
+  // 새 답변·오류·로딩이 시작되면 답변 패널을 맨 위로
+  useEffect(() => {
+    if (outputRef.current) outputRef.current.scrollTop = 0;
+  }, [done, error, loading]);
 
   useEffect(() => {
     getExamples().then((r) => {
@@ -98,18 +109,21 @@ export default function App() {
 
   return (
     <div className="page">
-      <div className="brand-band" aria-hidden title="오방색: 목·화·토·금·수" />
-      <header className="top">
-        <div className="seal" aria-hidden><span>四</span><span>柱</span><span>生</span><span>活</span></div>
-        <div className="brand">
-          <h1>사주 라이프 플래너</h1>
-          <p>
-            타고난 사주와 앞으로 12개월의 흐름으로 여행지·살 곳·내 계획을 근거와 함께 짚어 드립니다.
-            {referenceDate && <> 기준일 <strong>{referenceDate}</strong></>}
-          </p>
-        </div>
-        <ThemeToggle />
-      </header>
+      {/* 오방기: 위쪽 띠에서 다섯 색이 머리 영역으로 번져 내려온다 */}
+      <div className="masthead">
+        <div className="brand-band" aria-hidden title="오방색: 목·화·토·금·수" />
+        <header className="top">
+          <div className="seal" aria-hidden><span>四</span><span>柱</span><span>生</span><span>活</span></div>
+          <div className="brand">
+            <h1>사주 라이프 플래너</h1>
+            <p>
+              타고난 사주와 앞으로 12개월의 흐름으로 여행지·살 곳·내 계획을 근거와 함께 짚어 드립니다.
+              {referenceDate && <> 기준일 <strong>{referenceDate}</strong></>}
+            </p>
+          </div>
+          <ThemeToggle />
+        </header>
+      </div>
 
       <nav className="view-tabs" role="tablist" aria-label="화면">
         <button role="tab" aria-selected={view === "single"} className={view === "single" ? "on" : ""}
@@ -123,7 +137,7 @@ export default function App() {
         <ChatView />
       </div>
 
-      <main className="layout" hidden={view !== "single"}>
+      <main className="layout" hidden={view !== "single"} ref={layoutRef}>
         <article className="panel input-panel">
           <div className="seg mode" role="tablist" aria-label="입력 방식">
             <button role="tab" aria-selected={mode === "form"} className={mode === "form" ? "on" : ""}
@@ -137,7 +151,7 @@ export default function App() {
               <BirthForm value={birth} onChange={setBirth} />
               <label className="block">
                 질문
-                <textarea rows={3} value={question} onChange={(e) => setQuestion(e.target.value)}
+                <textarea rows={2} value={question} onChange={(e) => setQuestion(e.target.value)}
                           placeholder="예: 앞으로 1년 계획 짜줘 / 12월에 삿포로 여행 괜찮을까?" />
               </label>
               <div className="preview-box">
@@ -185,7 +199,7 @@ export default function App() {
           </p>
         </article>
 
-        <article className="panel output-panel">
+        <article className={`panel output-panel${!loading && !error && !done ? " watermark" : ""}`} ref={outputRef}>
           {loading && (
             <StreamProgress progress={progress} elapsedMs={elapsed} onCancel={() => abortRef.current?.abort()} />
           )}
