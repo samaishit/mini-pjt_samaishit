@@ -44,7 +44,33 @@ export function ChatView() {
   const [elapsed, setElapsed] = useState(0);
   const [progress, setProgress] = useState<Progress>(INITIAL_PROGRESS);
   const abortRef = useRef<AbortController | null>(null);
-  const endRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+
+  // 대화 영역이 화면 아래까지 딱 맞게: 실제 시작 위치를 재서 남은 높이를 채운다 (페이지 전체 스크롤 없이)
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const fit = () => {
+      if (window.innerWidth <= 860) {   // 좁은 화면은 위아래로 쌓으므로 고정 높이를 쓰지 않는다
+        box.style.removeProperty("--chat-h");
+        return;
+      }
+      const top = box.getBoundingClientRect().top + window.scrollY;
+      const page = box.closest(".page");
+      const pad = page ? parseFloat(getComputedStyle(page).paddingBottom) || 0 : 0;   // 페이지 아래 여백까지 빼야 전체 스크롤이 안 생긴다
+      if (top > 0) box.style.setProperty("--chat-h", `${Math.max(520, Math.floor(window.innerHeight - top - pad))}px`);
+    };
+    fit();
+    // 탭이 보이게 될 때(크기 변화)도 다시 잰다. ResizeObserver 가 없는 환경(테스트 등)은 창 크기 변화만 본다
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
+    ro?.observe(box);
+    window.addEventListener("resize", fit);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", fit);
+    };
+  }, []);
 
   const hasChart = !!session?.has_chart;
   // 사주 요약을 아직 기억하지 않았을 때만 출생 정보를 첫 메시지에 붙인다
@@ -61,7 +87,15 @@ export function ChatView() {
   }, [loading]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
+    // 메시지 영역 안에서만 움직인다 (페이지 전체는 그대로).
+    // 새 답변이 오면 그 답변의 시작 부분을, 질문을 보냈거나 기다리는 중이면 맨 아래를 보여 준다
+    const el = listRef.current;
+    if (!el) return;
+    const last = messages[messages.length - 1];
+    const bubbles = el.querySelectorAll<HTMLElement>(".bubble");
+    const lastBubble = bubbles[bubbles.length - 1];
+    if (!loading && last?.role === "assistant" && lastBubble) el.scrollTop = lastBubble.offsetTop - 8;   // .messages 가 위치 기준(relative)
+    else el.scrollTop = el.scrollHeight;
   }, [messages, loading]);
 
   async function send(text?: string) {
@@ -100,7 +134,7 @@ export function ChatView() {
   }
 
   return (
-    <div className="chat">
+    <div className="chat" ref={boxRef}>
       <article className="panel memory">
         <div className="memory-head">
           <strong>대화 기억</strong>
@@ -134,7 +168,7 @@ export function ChatView() {
       </article>
 
       <article className="panel thread">
-        <div className="messages" aria-live="polite">
+        <div className="messages" aria-live="polite" ref={listRef}>
           {!messages.length && (
             <div className="placeholder muted">
               <p>예: <em>내년 5월에 여행 어디로 가면 좋을까?</em> → <em>그럼 해외는?</em> → <em>다른 곳도 알려줘</em></p>
@@ -169,7 +203,6 @@ export function ChatView() {
               <StreamProgress progress={progress} elapsedMs={elapsed} onCancel={() => abortRef.current?.abort()} />
             </div>
           )}
-          <div ref={endRef} />
         </div>
 
         {session?.has_chart && (

@@ -119,7 +119,7 @@ export default function App() {
       </nav>
 
       {/* 두 화면을 모두 띄워 두고 표시만 바꾼다 (탭을 바꿔도 입력·대화가 남도록) */}
-      <div hidden={view !== "chat"}>
+      <div className="chat-view" hidden={view !== "chat"}>
         <ChatView />
       </div>
 

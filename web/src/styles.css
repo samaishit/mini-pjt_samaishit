@@ -123,6 +123,7 @@
 body { background: var(--paper); word-break: keep-all; overflow-wrap: anywhere; }   /* 한국어는 단어 단위로 줄바꿈 */
 h1, h2, h3, h4 { font-family: var(--serif); letter-spacing: -0.01em; }
 .page { max-width: 1280px; margin: 0 auto; padding: 0 16px 56px; }
+.page:has(.chat-view:not([hidden])) { padding-bottom: 16px; }   /* 대화 탭은 화면 높이에 딱 맞춘다 */
 .muted { color: var(--ink-muted); }
 .small { font-size: 0.85rem; }
 .spacer { flex: 1; }
@@ -188,9 +189,10 @@ label.block textarea, label.block select { margin: 4px 0 0; color: var(--ink); }
 .page button.ghost:hover { color: var(--ink); border-color: var(--ink-muted); background: transparent; }
 
 /* ---------- 빈 화면 안내 ---------- */
-.placeholder { position: relative; padding: 18px 6px 8px; overflow: hidden; }
-.placeholder::after { content: "四柱"; position: absolute; right: 8px; bottom: -18px; font-family: var(--serif); font-weight: 700;
-  font-size: 7rem; line-height: 1; color: var(--ink); opacity: 0.05; pointer-events: none; }
+.placeholder { position: relative; padding: 18px 6px 8px; min-height: 9.5rem; }
+.placeholder > * { position: relative; z-index: 1; }
+.placeholder::after { content: "四柱"; position: absolute; right: 4px; bottom: 4px; font-family: var(--serif); font-weight: 700;
+  font-size: 6.5rem; line-height: 1.15; padding-top: 0.1em; color: var(--ink); opacity: 0.05; pointer-events: none; }
 .placeholder ol { margin: 10px 0 0; padding-left: 1.2rem; }
 .placeholder li { margin: 4px 0; }
 
@@ -260,10 +262,16 @@ pre { margin: 0 0 8px; padding: 8px 10px; white-space: pre-wrap; word-break: bre
 .trace dd { margin: 0; }
 
 /* ---------- 대화 탭 ---------- */
-.chat { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; gap: 18px; align-items: start; }
-@media (max-width: 860px) { .chat { grid-template-columns: minmax(0, 1fr); } }
-.memory { position: sticky; top: 16px; }
-@media (max-width: 860px) { .memory { position: static; } }
+/* 대화창과 기억 패널은 화면 높이에 맞춘 같은 높이로 두고, 넘치는 내용은 각 패널 안에서 스크롤한다 */
+.chat { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; gap: 18px; align-items: stretch;
+  height: var(--chat-h, max(520px, calc(100dvh - 200px))); }   /* --chat-h: ChatView 가 실제 위치로 계산 */
+.page .chat article.panel { height: 100%; min-height: 0; }
+.memory { overflow-y: auto; }
+@media (max-width: 860px) {
+  .chat { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .page .chat article.panel { height: auto; }
+  .page .chat .thread { height: 78dvh; }
+}
 .memory-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .memory-head strong { font-family: var(--serif); color: var(--indigo); font-size: 1.05rem; }
 .page .memory-head button { width: auto; margin: 0; padding: 4px 12px; font-size: 0.85rem; }
@@ -271,8 +279,15 @@ pre { margin: 0 0 8px; padding: 8px 10px; white-space: pre-wrap; word-break: bre
 .memory-list dt { font-size: 0.78rem; color: var(--ink-muted); margin-top: 8px; font-weight: 600; }
 .memory-list dd { margin: 0; overflow-wrap: anywhere; }
 .memory label.check { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-.thread { display: flex; flex-direction: column; min-height: 60vh; }
-.messages { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+.thread { display: flex; flex-direction: column; }
+.messages { position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;
+  padding: 2px 6px 2px 2px; margin-right: -6px; overscroll-behavior: contain; }
+.chips, .composer, .thread > .warn, .thread > p { flex: none; }
+/* 스크롤바: 얇게, 테마 색으로 */
+.messages, .memory { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.messages::-webkit-scrollbar, .memory::-webkit-scrollbar { width: 8px; }
+.messages::-webkit-scrollbar-thumb, .memory::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
+.messages::-webkit-scrollbar-thumb:hover, .memory::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
 .bubble { border-radius: 14px; padding: 12px 16px; max-width: 100%; overflow-wrap: anywhere; }
 .bubble.user { align-self: flex-end; max-width: 85%; background: var(--indigo); color: #fff; white-space: pre-wrap;
   border-bottom-right-radius: 4px; }
