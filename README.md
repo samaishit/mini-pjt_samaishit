@@ -55,21 +55,34 @@ cd mcp_servers/saju && npm install && npm run build && npm test && cd ../..
 # 2) RAG 인덱스 생성 (규칙 43 + 장소 70 = 113건)
 python -m src.retriever --build
 
-# 3) API 실행
+# 3) 웹 테스트 화면 빌드 (최초 1회, React + Vite)
+cd web && npm install && npm run build && cd ..
+
+# 4) API + 웹 화면 실행 → 브라우저에서 http://localhost:8000/
 uvicorn src.api:api --port 8000
 #   PowerShell: Invoke-RestMethod -Uri http://localhost:8000/query -Method Post -ContentType "application/json; charset=utf-8" -Body '{"question": "1988년 11월 3일 오전 7시 양력생 남성입니다. 내년 5월에 여행 어디로 가면 좋을까?"}'
 #   또는 한 번만: python -m src.agent "질문"
 
-# 4) 단위 테스트 (Bedrock 불필요)
+# 5) 단위 테스트 (Bedrock 불필요)
 python -m unittest discover -s tests -t .
+cd web && npm test && cd ..
 
-# 5) 평가: 인-아웃 세트 실행·판정·리포트 → evaluation/roundN_report.md
+# 6) 평가: 인-아웃 세트 실행·판정·리포트 → evaluation/roundN_report.md
 python -m evaluation.run_eval --round 1
 #    RAGAS 는 평가 전용 venv(Python 3.12, ragas 가 3.14 휠 미지원)
 uv venv --python 3.12 .venv-eval && uv pip install --python .venv-eval/Scripts/python.exe -r requirements-eval.txt
 .venv-eval\Scripts\python evaluation/ragas_eval.py --round 1
 ```
 - Bedrock 일일 토큰 한도에 걸리면 `SAJU_LLM_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0`로 모델을 바꿔 실행할 수 있다 (기본 Claude Sonnet 4.5).
+- **한도 초과 자동 대체**: 답변 LLM 호출이 스로틀링(`ThrottlingException` 등)으로 실패하면 `global.anthropic.claude-sonnet-4-5-20250929-v1:0` → `us.anthropic.claude-sonnet-4-6` 순서로 모델을 바꿔 같은 요청을 다시 보낸다 ([src/llm.py](src/llm.py), 순서는 `SAJU_LLM_FALLBACKS`로 변경). 대체가 일어나면 trace 에 `llm:fallback` 단계가 남고, 모두 실패하면 503 응답의 `error_type` 에 오류 종류가 담긴다. 심사 모델(`JUDGE_MODEL`)은 라운드 비교를 위해 대체하지 않는다.
+
+## 웹 테스트 화면 ([web/](web))
+`POST /query` 를 호출하는 React 테스트 화면이다. API 계약은 그대로이고, 빌드 결과(`web/dist`)를 FastAPI 가 `/` 에서 함께 서빙한다.
+- **폼 입력**: 생년월일·양/음력·윤달·출생 시각(모름)·성별과 질문을 받아 서버 파서가 읽는 문장으로 조립해 보낸다 (예: `양력 1988년 11월 3일 오전 7시 출생 남성입니다. 내년 5월에 여행 어디로 가면 좋을까?`). 조립 형식은 `web/src/composer.cases.json` 으로 vitest 와 `tests/test_web_composer.py`(서버 파서)가 함께 검증한다.
+- **직접 입력 / 예시 질문**: 문장을 통째로 쓰거나 평가셋 24건(`GET /examples`)에서 골라 파서 되묻기·가드레일을 시험한다.
+- **결과**: 답변(마크다운)과 응답 종류(답변·거절·되묻기), 경과 시간, **처리 과정** 탭(trace 단계·지연 시간·마스킹된 입출력), **근거** 탭(contexts 의 doc_id·종류·본문).
+- 출생 정보는 요청 본문에만 실리고 브라우저 저장소에 남기지 않는다. 화면의 trace·근거는 서버가 이미 `<BIRTH>` 로 가린 값이다.
+- 개발 모드: `uvicorn` 을 띄운 상태에서 `cd web && npm run dev` → http://localhost:5173 (API 는 8000 으로 프록시).
 
 ## RAGAS 평가 결과
 2차 최종 실행 기준, guardrail 을 뺀 16건 중 contexts 가 있는 14건 평균(되묻기 응답 10·11 제외). 평가 LLM Sonnet 4.5, 임베딩 Titan v2. 괄호는 1차 값.

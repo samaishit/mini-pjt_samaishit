@@ -131,9 +131,8 @@ _checker = None
 def llm_check(masked_text: str) -> InputCheck:
     global _checker
     if _checker is None:
-        from langchain_aws import ChatBedrockConverse
-        llm = ChatBedrockConverse(model=config.MODEL, region_name=config.REGION, temperature=0)
-        _checker = llm.with_structured_output(InputCheck)
+        from src.llm import make_llm   # 한도 초과 시 대체 모델로 넘어간다
+        _checker = make_llm(max_tokens=1024).with_structured_output(InputCheck)
     return _checker.invoke(LLM_CHECK_PROMPT.format(text=masked_text))
 
 

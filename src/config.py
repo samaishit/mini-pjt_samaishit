@@ -14,6 +14,9 @@ REGION = "us-east-1"
 DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 # Bedrock 일일 토큰 한도에 걸리면 SAJU_LLM_MODEL 로 임시 교체한다 (예: us.anthropic.claude-haiku-4-5-20251001-v1:0)
 MODEL = os.getenv("SAJU_LLM_MODEL", DEFAULT_MODEL)
+# 답변 모델이 한도 초과(스로틀링)로 실패하면 이 순서대로 바꿔 다시 호출한다 (src/llm.py). 쉼표로 구분, 빈 값이면 대체 안 함
+DEFAULT_MODEL_FALLBACKS = "global.anthropic.claude-sonnet-4-5-20250929-v1:0,us.anthropic.claude-sonnet-4-6"
+MODEL_FALLBACKS = [m.strip() for m in os.getenv("SAJU_LLM_FALLBACKS", DEFAULT_MODEL_FALLBACKS).split(",") if m.strip()]
 # 심사(LLM-as-Judge) 모델은 답변 모델과 분리해 고정한다. SAJU_LLM_MODEL 의 영향을 받지 않는다
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", DEFAULT_MODEL)
 BEDROCK_READ_TIMEOUT_S = 60

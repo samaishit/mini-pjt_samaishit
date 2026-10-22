@@ -9,6 +9,8 @@ __pycache__/
 # Node (사주 MCP 포크)
 node_modules/
 mcp_servers/saju/dist/
+web/dist/
+*.tsbuildinfo
 
 # 생성물
 data/index/

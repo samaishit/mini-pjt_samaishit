@@ -187,6 +187,72 @@ class TestDeterministicClaims(unittest.TestCase):
                                                                    set(st.contexts)))
 
 
+class TestHangulHanja(unittest.TestCase):
+    """간지·오행 한자는 사용자에게 '한글(한자)'로 보인다."""
+
+    def test_annotate(self):
+        from src.hanja import annotate
+        self.assertEqual(annotate("戊戌월(2026-10-08 ~ 2026-11-06)에 용신 土"), "무술(戊戌)월(2026-10-08 ~ 2026-11-06)에 용신 토(土)")
+        self.assertEqual(annotate("용신 丙(화·火), 癸(수·水)"), "용신 병화(丙火), 계수(癸水)")
+        self.assertEqual(annotate("(木 동, 火 남)"), "(목(木) 동, 화(火) 남)")
+        once = annotate("丙午년 戊戌월 土")
+        self.assertEqual(annotate(once), once)   # 두 번 바꿔도 같다
+
+    def test_range_repair_accepts_hangul_form(self):
+        app = SajuPlannerApp(hub=None, use_llm_guard=False)
+        make_state()
+        ans = StructuredAnswer(claims=[Claim(section="월별 운세", text="기해(己亥)월(2026-11-08 ~ 2026-12-07)입니다.",
+                                             doc_ids=["mcp:saju"])])
+        self.assertEqual(app._repair_month_ranges(ans), 1)
+        self.assertEqual(ans.claims[0].text, "己亥월(2026-11-07 ~ 2026-12-06)입니다.")
+
+
+class TestSummaryAndReasons(unittest.TestCase):
+    """사주 요약·장소 이유·용신 오기 검사"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = SajuPlannerApp(hub=None, use_llm_guard=False)
+
+    def chart(self):
+        return {**CHART, "pillars": {"year": "庚申", "month": "己丑", "day": "丙申", "hour": "壬辰"},
+                "day_stem": "丙", "day_branch": "申", "strength": "neutral", "geukguk": "식상격",
+                "yongsin": ["壬", "己"], "yongsin_elements": ["水", "土"],
+                "months": [{**CHART["months"][0], "year_ganzhi": "丙午", "good_month": True}]}
+
+    def test_summary_claims(self):
+        st = make_state()
+        st.chart = self.chart()
+        texts = [c.text for c in self.app._summary_claims()]
+        self.assertIn("원국은 연주 庚申, 월주 己丑, 일주 丙申, 시주 壬辰입니다. 일간은 丙火", texts[0])
+        self.assertIn("용신은 壬水, 己土입니다", texts[1])
+        self.assertIn("좋은 달은 1개(己亥월)", texts[2])
+        for c in self.app._summary_claims():
+            self.assertEqual(self.app._claim_violations(c, set(st.contexts)), [], c.text)
+
+    def test_wrong_yongsin_element_flagged(self):
+        st = make_state()   # 용신 火·水·木
+        bad = Claim(section="사주 해석", text="강원도는 용신 水·金의 방위와 맞습니다.", doc_ids=["mcp:saju"])
+        self.assertTrue(any("용신이 아닌 오행" in v for v in self.app._claim_violations(bad, set(st.contexts))))
+        ok = Claim(section="사주 해석", text="그 달 기운이 용신 水와 맞습니다.", doc_ids=["mcp:saju"])
+        self.assertEqual(self.app._claim_violations(ok, set(st.contexts)), [])
+
+    def test_province_plan_lists_db_places_with_reasons(self):
+        st = make_state()
+        st.chart = self.chart()
+        st.route = ["plan_agent"]
+        st.add_context("tool:evaluate_plan", "{}", "tool", "plan")
+        st.add_context("T-KR-CHUNCHEON", "춘천 ...", "tool", "place")
+        st.plan_results = [{"rating": "좋음", "ganzhi": "己亥", "start_date": "2026-11-07", "end_date": "2026-12-06",
+                            "month_yongsin_match": ["土"], "clash_with_day_branch": False, "place_id": None,
+                            "province": "강원도", "alternatives": [{"id": "T-KR-CHUNCHEON", "name": "춘천"}],
+                            "basis": "rule:travel:plan-rating",
+                            "plan": {"kind": "travel", "month": 10, "place": "강원도", "year": 2026, "activity": "캠핑"}}]
+        text = self.app._plan_claims()[0].text
+        self.assertTrue(text.startswith("2026년 10월 강원도 캠핑은 己亥월"))
+        self.assertIn("강원도 안에서는 춘천(북동쪽, 호수·남이섬·소양강, 용신 水 기운, 10월 추천 시기)이 용신에 맞습니다", text)
+
+
 class TestSupervisorHandoff(unittest.TestCase):
     """Supervisor 의 동시 넘기기를 아직 보고하지 않은 에이전트 하나로 줄인다 (반복 넘기기 방지)."""
 

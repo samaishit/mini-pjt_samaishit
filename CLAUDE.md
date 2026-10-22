@@ -37,7 +37,9 @@ mini-pjt_samaishit/
 │   ├── guards.py         # 입력·출력 가드, REFUSAL_MESSAGES 고정 문구
 │   ├── tracing.py        # 요청별 TraceRecorder (마스킹, 300자 절단)
 │   ├── schemas.py        # 답변 Pydantic 모델 (claims[{text, doc_ids}])
-│   └── config.py         # MODEL, REFERENCE_DATE 등 상수
+│   ├── llm.py            # Bedrock LLM 생성 + 한도 초과 시 대체 모델(MODEL_FALLBACKS) 재호출
+│   ├── hanja.py          # 간지·오행 한자 → '한글(한자)' 표기 (사용자 출력 직전)
+│   └── config.py         # MODEL, MODEL_FALLBACKS, REFERENCE_DATE 등 상수
 ├── mcp_servers/
 │   ├── saju/             # mcp-saju 포크 (now 파라미터, get_luck_calendar)
 │   └── places/           # FastMCP 장소 DB 서버
@@ -50,6 +52,7 @@ mini-pjt_samaishit/
 │   ├── references.json   # RAGAS 정답 요지 (guardrail 제외 16건)
 │   ├── run_eval.py / judge.py / ragas_eval.py
 │   └── round1_report.md / round2_report.md
+├── web/                  # React(Vite+TS) 테스트 화면: POST /query 클라이언트, 빌드 결과 web/dist 를 FastAPI 가 / 에서 서빙
 └── tests/                # 파서·판정 함수 단위 테스트 (Bedrock 불필요)
 ```
 

@@ -20,6 +20,7 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 
 from src import config
 from src.birth_parser import BirthInfo
+from src.hanja import annotate
 from src.retriever import retrieve_docs
 from src.tracing import current
 
@@ -152,26 +153,31 @@ async def compute_chart(birth: BirthInfo, reference_date: str) -> dict:
     return chart
 
 
+STRENGTH_KO = {"weak": "신약", "strong": "신강", "neutral": "중화", "balanced": "중화"}
+PILLAR_KO = {"year": "연주", "month": "월주", "day": "일주", "hour": "시주"}
+
+
 def chart_text(chart: dict) -> str:
-    """LLM 과 contexts 에 넣을 사주 요약 (원본 생년월일 없음)."""
+    """LLM 과 contexts 에 넣을 사주 요약 (원본 생년월일 없음). 간지·오행은 '한글(한자)'로 적는다."""
     ys = ", ".join(f"{s}({ELEMENT_KO[STEM_ELEMENT[s]]}·{STEM_ELEMENT[s]})" for s in chart["yongsin"])
-    pillars = " ".join(f"{k}:{v}" for k, v in chart["pillars"].items())
+    pillars = " ".join(f"{PILLAR_KO.get(k, k)} {v}" for k, v in chart["pillars"].items())
     lines = [
         f"[사주 요약] 기준일 {chart['reference_date']}, 입력 {chart['calendar_input']}"
         + ("" if chart["hour_known"] else ", 출생 시각 미상(시주 제외)"),
-        f"원국 {pillars} / 일간 {chart['day_stem']}, 일지 {chart['day_branch']} / {chart['strength']}, {chart['geukguk']}",
+        f"원국 {pillars} / 일간 {chart['day_stem']}, 일지 {chart['day_branch']} / "
+        f"{STRENGTH_KO.get(chart['strength'], chart['strength'])}, {chart['geukguk']}",
         f"용신 {ys}",
         "[12개 절기 월] 번호. 양력 달(15일 기준) = 월운(세운) 기간 | 천간·지지 십성 | 12운성 | 용신 일치 | 일지 충",
     ]
     for m in chart["months"]:
         lines.append(
-            f"{m['index']}. {m['solar_label']} = {m['month_ganzhi']}월({m['year_ganzhi']}년) {m['start_date']}~{m['end_date']} | "
+            f"{m['index']}. {m['solar_label']} = {m['month_ganzhi']}월, {m['year_ganzhi']}년, {m['start_date']}~{m['end_date']} | "
             f"{m['stem_ten_god']}·{m['branch_ten_god']} | {m['stage12']} | "
             f"{','.join(m['yongsin_match']) or '-'} | {'충' if m['clash_with_day_branch'] else '-'}"
         )
     lines.append(f"이사 좋은 달: {', '.join(chart['good_move_months']) or '없음'} / "
                  f"이사 피할 달(일지 충): {', '.join(chart['avoid_move_months']) or '없음'}")
-    return "\n".join(lines)
+    return annotate("\n".join(lines))
 
 
 # 명리 기준 계절 (절기 월 지지): 봄 寅卯辰, 여름 巳午未, 가을 申酉戌, 겨울 亥子丑
@@ -308,6 +314,24 @@ def _aliases(name: str) -> set[str]:
             if token.endswith(("구", "시")) and len(token) >= 3:
                 parts.add(token[:-1])
     return parts
+
+
+# 계획 문장의 도·광역시 이름 → 여행지 DB 의 province (예: '강원도' → 강원)
+PROVINCE_ALIASES = {
+    "강원": ("강원도", "강원"), "경기": ("경기도", "경기"), "충북": ("충청북도", "충북"), "충남": ("충청남도", "충남"),
+    "전북": ("전라북도", "전북"), "전남": ("전라남도", "전남"), "경북": ("경상북도", "경북"), "경남": ("경상남도", "경남"),
+    "제주": ("제주도", "제주"), "부산": ("부산",),
+}
+PROVINCE_LABEL = {"강원": "강원도", "경기": "경기도", "충북": "충청북도", "충남": "충청남도", "전북": "전라북도",
+                  "전남": "전라남도", "경북": "경상북도", "경남": "경상남도", "제주": "제주도", "부산": "부산"}
+
+
+def match_province(text: str) -> str | None:
+    """'강원도에 캠핑' 같은 표현에서 광역 지역을 찾는다 (장소 이름이 DB 에 없을 때만 쓴다)."""
+    for prov, aliases in PROVINCE_ALIASES.items():
+        if any(a in text for a in aliases):
+            return prov
+    return None
 
 
 def lookup_place(text: str, kind: str | None = None) -> dict | None:
@@ -481,7 +505,8 @@ async def get_region(region_id: str) -> str:
 
 
 @tool
-async def evaluate_plan(month: int, kind: str, place: str | None = None, year: int | None = None) -> str:
+async def evaluate_plan(month: int, kind: str, place: str | None = None, year: int | None = None,
+                        activity: str | None = None) -> str:
     """사용자의 계획 하나를 좋음/보통/주의로 평가한다 (rule:travel:plan-rating 기준).
 
     계획마다 한 번씩 호출한다. 예: "12월 삿포로 여행" → month=12, kind="travel", place="삿포로"
@@ -492,12 +517,13 @@ async def evaluate_plan(month: int, kind: str, place: str | None = None, year: i
         kind: "travel"(여행) 또는 "move"(이사)
         place: 사용자가 말한 장소 이름 (없으면 생략)
         year: 계획한 연도 (사용자가 말했거나 '내년'이면 기준일 다음 해). 없으면 기준일 이후 가장 가까운 해
+        activity: 사용자가 말한 활동 이름 (예: "캠핑", "등산"). 여행·이사면 생략
     """
     chart = current().chart
     if not chart:
         return NO_CHART
     m = find_month(month, year)
-    plan = {"kind": kind, "month": month, "place": place, "year": year}
+    plan = {"kind": kind, "month": month, "place": place, "year": year, "activity": activity}
     if m is None:
         res = {"rating": None, "status": "out_of_window",
                "message": f"조회 범위({chart['months'][0]['start_date']}~{chart['months'][-1]['end_date']}) 밖이라 평가하지 않습니다.",
@@ -507,6 +533,8 @@ async def evaluate_plan(month: int, kind: str, place: str | None = None, year: i
         return json.dumps(res, ensure_ascii=False)
 
     target = lookup_place(place, "travel" if kind == "travel" else "region") if place else None
+    # 장소가 DB 에 없지만 도 이름이면(예: 강원도) 그 지역의 DB 장소 가운데서 대안을 고른다
+    province = match_province(place) if place and not target and kind == "travel" else None
     score = None
     alternatives = []
     if kind == "travel":
@@ -514,6 +542,9 @@ async def evaluate_plan(month: int, kind: str, place: str | None = None, year: i
                                                  "month": m["solar_month"], "limit": 40})
         if target:
             score = next((c["score"] for c in cands if c["id"] == target["id"]), None)
+        if province:
+            in_prov = {p["id"] for p in PLACES if p.get("province") == province}
+            cands = [c for c in cands if c["id"] in in_prov]
         alternatives = [_brief(c) for c in cands if not target or c["id"] != target["id"]][:3]
     else:
         # 이사 계획: 지역을 말했으면 그 지역 점수를, 아니면 용신에 맞는 추천 지역을 함께 돌려준다
@@ -538,6 +569,7 @@ async def evaluate_plan(month: int, kind: str, place: str | None = None, year: i
         "month_yongsin_match": m["yongsin_match"], "clash_with_day_branch": m["clash_with_day_branch"],
         "place": target["name"] if target else place, "place_id": target["id"] if target else None,
         "in_db": bool(target) if place else None, "place_score": score,
+        "province": PROVINCE_LABEL.get(province) if province else None,
         "alternatives": alternatives if rating == "주의" or (place and not target) else [],
         "suggested_regions": alternatives if kind == "move" and not target else [],
         "better_move_months": chart["good_move_months"] if kind == "move" and rating == "주의" else [],

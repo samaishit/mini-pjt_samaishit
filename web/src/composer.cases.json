@@ -1,0 +1,35 @@
+{
+  "_meta": "폼 값 → 조립 문장 → 서버 파서 결과의 대응표. web/src/composer.test.ts(문장 조립)와 tests/test_web_composer.py(파서 해석)가 함께 쓴다.",
+  "cases": [
+    {
+      "fields": {"year": 1988, "month": 11, "day": 3, "calendar": "solar", "leap": false, "timeKnown": true, "hour": 7, "minute": 0, "gender": "남"},
+      "sentence": "양력 1988년 11월 3일 오전 7시 출생 남성입니다.",
+      "birth": {"year": 1988, "month": 11, "day": 3, "calendar": "solar", "leap": false, "gender": "남", "hour": 7, "minute": 0}
+    },
+    {
+      "fields": {"year": 1992, "month": 4, "day": 12, "calendar": "solar", "leap": false, "timeKnown": true, "hour": 14, "minute": 30, "gender": "여"},
+      "sentence": "양력 1992년 4월 12일 오후 2시 30분 출생 여성입니다.",
+      "birth": {"year": 1992, "month": 4, "day": 12, "calendar": "solar", "leap": false, "gender": "여", "hour": 14, "minute": 30}
+    },
+    {
+      "fields": {"year": 1990, "month": 7, "day": 15, "calendar": "lunar", "leap": false, "timeKnown": false, "hour": 0, "minute": 0, "gender": "여"},
+      "sentence": "음력 1990년 7월 15일 출생 여성입니다. 태어난 시간은 몰라요.",
+      "birth": {"year": 1990, "month": 7, "day": 15, "calendar": "lunar", "leap": false, "gender": "여", "hour": null, "minute": null}
+    },
+    {
+      "fields": {"year": 1993, "month": 3, "day": 10, "calendar": "lunar", "leap": true, "timeKnown": true, "hour": 9, "minute": 0, "gender": "남"},
+      "sentence": "음력 1993년 윤3월 10일 오전 9시 출생 남성입니다.",
+      "birth": {"year": 1993, "month": 3, "day": 10, "calendar": "lunar", "leap": true, "gender": "남", "hour": 9, "minute": 0}
+    },
+    {
+      "fields": {"year": 2000, "month": 1, "day": 1, "calendar": "solar", "leap": false, "timeKnown": true, "hour": 0, "minute": 30, "gender": "여"},
+      "sentence": "양력 2000년 1월 1일 오전 12시 30분 출생 여성입니다.",
+      "birth": {"year": 2000, "month": 1, "day": 1, "calendar": "solar", "leap": false, "gender": "여", "hour": 0, "minute": 30}
+    },
+    {
+      "fields": {"year": 1985, "month": 12, "day": 31, "calendar": "solar", "leap": true, "timeKnown": true, "hour": 12, "minute": 5, "gender": "남"},
+      "sentence": "양력 1985년 12월 31일 오후 12시 5분 출생 남성입니다.",
+      "birth": {"year": 1985, "month": 12, "day": 31, "calendar": "solar", "leap": false, "gender": "남", "hour": 12, "minute": 5}
+    }
+  ]
+}

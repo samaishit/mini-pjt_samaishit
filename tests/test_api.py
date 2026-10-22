@@ -57,6 +57,40 @@ class TestContract(unittest.TestCase):
             r = c.post("/query", json={"question": "1992년 4월 12일생 여자"})
         self.assertEqual(r.status_code, 503)
         self.assertNotIn("1992", r.text)
+        self.assertEqual(r.json()["error_type"], "RuntimeError")
+
+    def test_error_type_finds_aws_code_in_chain(self):
+        from botocore.exceptions import ClientError
+        throttled = ClientError({"Error": {"Code": "ThrottlingException", "Message": "Too many tokens"}}, "Converse")
+        try:
+            try:
+                raise throttled
+            except ClientError as inner:
+                raise ValueError("wrapped by langchain") from inner
+        except ValueError as e:
+            self.assertEqual(api.error_type(e), "ThrottlingException")
+
+
+class TestWebSupport(unittest.TestCase):
+    """웹 테스트 화면용 보조 경로: 예시 질문 목록과 화면(또는 빌드 안내)."""
+
+    def test_examples_list_eval_set(self):
+        with client(StubApp()) as c:
+            body = c.get("/examples").json()
+        self.assertEqual(body["reference_date"], "2026-10-21")
+        self.assertEqual(len(body["examples"]), 24)
+        self.assertEqual(set(body["examples"][0]), {"id", "category", "input"})
+        self.assertEqual({e["category"] for e in body["examples"]}, {"positive", "negative", "edge", "guardrail"})
+
+    def test_root_serves_page(self):
+        with client(StubApp()) as c:
+            r = c.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("text/html", r.headers["content-type"])
+
+    def test_query_route_not_shadowed_by_static_mount(self):
+        with client(StubApp()) as c:
+            self.assertEqual(c.post("/query", json={"question": "용신이 뭐야?"}).json()["answer"], "ok")
 
 
 class TestStatelessRefusals(unittest.TestCase):

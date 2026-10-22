@@ -13,7 +13,6 @@ from typing import Any, TypedDict
 
 from botocore.exceptions import ReadTimeoutError
 
-from botocore.config import Config as BotoConfig
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, StateGraph
@@ -22,19 +21,23 @@ from langgraph_supervisor import create_supervisor
 
 from src import config, guards, tools
 from src.birth_parser import parse
+from src.hanja import annotate
+from src.llm import make_llm
 from src.schemas import Claim, StructuredAnswer, render_answer, strip_doc_tags
 from src.tracing import RequestState, TraceCallback, start_request
+from src.tracing import current as current_state
 
 GANZHI_CHARS = set("甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # '己亥월(2026-11-07 ~ 2026-12-06)' 형태의 기간 표기 (교정 대상)
-MONTH_RANGE_RE = re.compile(r"([甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥])월\s*\(\s*\d{4}-\d{2}-\d{2}\s*[~∼-]\s*(?:\d{4}-)?\d{2}-\d{2}"
+MONTH_RANGE_RE = re.compile(r"(?:[가-힣]{2}\()?([甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥])\)?월\s*\(\s*\d{4}-\d{2}-\d{2}\s*[~∼-]\s*(?:\d{4}-)?\d{2}-\d{2}"
                             r"[^)\n]{0,12}\)")
 # 양력 'N월' 표기 (작성자가 절기 월 번호를 양력 월로 잘못 옮기는 경우를 거른다)
 SOLAR_MONTH_RE = re.compile(r"(?<![\d-])\d{1,2}\s*월(?!\s*\()")
 
 # 질문 의도 → 반드시 호출할 전문 에이전트 (결정론 키워드 규칙, Supervisor 에 힌트로 주고 누락 시 직접 보완)
-PLAN_EVAL_RE = re.compile(r"(\d{1,2}\s*월|내년|올해|이번)[^.?!]{0,30}(여행|이사)[^.?!]{0,20}(괜찮|어때|어떨|해도 될|가도 될)"
+PLAN_EVAL_RE = re.compile(r"(\d{1,2}\s*월|내년|올해|이번)[^.?!]{0,30}(여행|이사|캠핑|휴가|등산|트레킹|낚시|나들이|드라이브|출장)"
+                          r"[^.?!]{0,25}(괜찮|어때|어떨|해도 될|가도 될|맞아|맞을까|맞나|맞는지|어울)"
                           r"|계획[^.?!]{0,20}(괜찮|어때|어떨)")
 FULL_YEAR_RE = re.compile(r"(앞으로|향후|내년|올해)?\s*(1년|일\s*년|한\s*해|연간)\s*(동안\s*)?(계획|운세|흐름)")
 # 여행 에이전트는 '추천'을 원할 때만 (예: '여행 가면 어느 달 운?'은 사주 해석)
@@ -49,9 +52,19 @@ RULE_DOCS_BY_AGENT = {
     "plan_agent": ["rule:travel:plan-rating", "rule:residence:move-timing"],
     "residence_agent": ["rule:residence:selection", "rule:residence:move-timing"],
 }
+# 사주 요약 문장의 근거 문서 (출생 정보가 있으면 항상 미리 검색 결과에 넣는다)
+SUMMARY_RULE_DOCS = ["rule:yongsin:overview", "rule:direction:oheng"]
+# 오행별 방위·계절·환경 (rule:direction:oheng 과 같은 내용)
+ELEMENT_TRAITS = {"木": ("동쪽", "봄", "숲·정원"), "火": ("남쪽", "여름", "햇볕·활기 있는 도심"),
+                  "土": ("중앙", "환절기", "평지·고도·유적"), "金": ("서쪽", "가을", "바위·산악"),
+                  "水": ("북쪽", "겨울", "바다·강·호수")}
+STRENGTH_KO = {"weak": "신약한", "strong": "신강한", "neutral": "중화된", "balanced": "중화된"}
+# '용신 水·木' 처럼 용신이라고 말한 오행 (한자 또는 '수(水)' 표기)
+YONGSIN_CLAIM_RE = re.compile(r"용신\s*(?:인|은|는|이|의|중|으로)?\s*((?:[가-힣]\()?[木火土金水]\)?(?:\s*[·,]\s*(?:[가-힣]\()?[木火土金水]\)?)*)")
+PILLAR_KO = {"year": "연주", "month": "월주", "day": "일주", "hour": "시주"}
 # 답변 섹션 표시 순서
 SECTION_ORDER = {name: i for i, name in enumerate(
-    ["사주 요약", "월별 운세", "계획 평가", "여행 추천", "주거 추천", "이사 시기", "안내", "근거 자료"])}
+    ["사주 요약", "사주 해석", "월별 운세", "계획 평가", "여행 추천", "주거 추천", "이사 시기", "안내", "근거 자료"])}
 AGENT_MAX_TOKENS = 1500   # 전문 에이전트 보고 길이 상한
 # 계획 전용 질문에서 코드가 만든 '계획 평가'로 대체하는 작성자 섹션
 PLAN_REPLACED_SECTIONS = {"계획 평가", "여행 추천", "이사 시기", "주거 추천"}
@@ -95,11 +108,8 @@ def required_agents(question: str) -> list[str]:
 
 
 def llm(max_tokens: int = 4096) -> ChatBedrockConverse:
-    # 호출마다 읽기 타임아웃을 걸어 Bedrock 이 응답하지 않아도 요청이 무한정 걸리지 않게 한다
-    boto_config = BotoConfig(read_timeout=config.BEDROCK_READ_TIMEOUT_S, connect_timeout=10,
-                             retries={"max_attempts": 2, "mode": "standard"})
-    return ChatBedrockConverse(model=config.MODEL, region_name=config.REGION, temperature=0, max_tokens=max_tokens,
-                               config=boto_config)
+    # 읽기 타임아웃으로 무한 대기를 막고, 한도 초과면 config.MODEL_FALLBACKS 순서로 모델을 바꿔 다시 호출한다
+    return make_llm(max_tokens=max_tokens)
 
 
 ERROR_MESSAGE = "죄송합니다. 일시적인 오류로 답변을 만들지 못했습니다. 잠시 후 다시 시도해 주세요."
@@ -162,6 +172,9 @@ PLAN_PROMPT = f"""너는 계획 평가 전문가(plan_agent)다. 사용자가 �
 evaluate_plan 을 한 번씩 호출한다. '내년'은 기준일 다음 해다. 결과의 rating(좋음/보통/주의), 근거,
 대안(alternatives, better_move_months)을 그대로 보고한다. status 가 out_of_window 면 범위 밖이라 평가하지 않는다고 보고한다.
 in_db 가 false 면 'DB 외 장소'라 상세 평가를 할 수 없다고 밝히고 대안을 제시한다.
+캠핑·휴가·등산처럼 이동하는 활동은 kind="travel", activity 에 활동 이름(예: "캠핑")을 넣고, place 에는 사용자가 말한
+장소(예: "강원도")를 그대로 넣는다.
+'10월말'처럼 말하면 month=10 이다.
 {COMMON_RULES}"""
 
 SUPERVISOR_PROMPT = """너는 사주 라이프 플래너의 작업 분배자(Supervisor)다. 직접 답하지 말고 질문 의도에 맞는 전문 에이전트만 호출한다.
@@ -187,16 +200,21 @@ COMPOSE_PROMPT = """당신은 사주 라이프 플래너의 최종 답변 작성
 8. 시세·집값·매수·매도·청약·대출·투자 표현을 쓰지 않는다.
 9. 출생 시각 미상이면 시주를 제외했다는 안내를 넣는다. DB 외 장소, 조회 범위 밖이면 그 사실을 분명히 말한다.
 10. 동행자가 언급되면 본인 사주 기준이라고 밝힌다. 사주 요약이 없으면 생년월일을 요청하는 claim 하나만 쓴다.
-11. 섹션 이름은 '사주 요약', '월별 운세', '여행 추천', '주거 추천', '이사 시기', '계획 평가', '안내' 중에서 고른다.
+11. 섹션 이름은 '사주 해석', '월별 운세', '여행 추천', '주거 추천', '이사 시기', '계획 평가', '안내' 중에서 고른다.
+    '사주 요약'(원국·일간·용신·12개월 흐름)은 시스템이 붙이므로 쓰지 않는다. 질문과 관련된 해석(그 달 월운의 십성 의미,
+    용신과의 관계)은 '사주 해석' 섹션에 쓴다.
 12. '당신'이라고 부르지 말고 주어를 생략하거나 '~님'처럼 정중하게 쓴다.
 13. 계획 평가 claim 은 '좋음/보통/주의' 등급 이름과 해당 절기 월 기간을 반드시 함께 쓴다.
 14. 여러 달을 추천하는 요청이면 보고에 나온 달마다 국내·해외 추천을 빠짐없이 옮긴다.
-15. 용신 일치 오행은 사주 요약 표의 '용신 일치' 값 그대로 쓴다.
+15. 용신 일치 오행은 사주 요약 표의 '용신 일치' 값 그대로 쓴다. 월운과 용신은 오행으로 비교한다
+    (예: '무술(戊戌)월의 토(土) 기운이 용신 토(土)와 맞는다'). 용신 천간 글자가 월운에 들어 있다고 쓰지 않는다.
 16. 근거 목록에 mcp:saju 가 있으면 사주 요약이 있는 것이다. 이때 생년월일을 다시 묻지 않는다.
     생년월일은 <BIRTH> 로 가려져 있으므로 출생 연·월('12월생', '1988년생' 등)을 짐작해 쓰지 않는다.
 17. 용신·오행·십성의 의미를 묻는 질문에는 rule 문서를 근거로 개념, 사용자 사주에서의 의미, 생활 활용(방위·환경·계절) 예시를 각각 한 문장 이상 쓴다.
 18. doc_id 는 doc_ids 필드에만 넣고 text 에는 [doc_id] 같은 태그를 쓰지 않는다.
     대신 해석 근거는 "명리 해설 「용신이란」에 따르면"처럼 문서 제목으로 자연스럽게 밝힌다.
+19. 간지·오행은 '무술(戊戌)월', '병오(丙午)년', '토(土)', '병화(丙火)'처럼 한글 읽기 뒤 괄호에 한자를 쓴다. 한자만 단독으로 쓰지 않는다.
+20. 질문에 먼저 답하고, 왜 그런지를 사용자의 용신·그 달 월운(십성)과 장소의 오행·방위·환경으로 연결해 2~3문장으로 설명한다.
 {travel_note}
 {feedback}
 [사용자 질문]
@@ -315,6 +333,8 @@ class SajuPlannerApp:
         if spans:
             content += "\n[날짜 구간의 절기 월 (절입일 기준, 그대로 인용)]\n" + "\n".join(self._span_text(sp) for sp in spans)
         extra = [d for name, ids in RULE_DOCS_BY_AGENT.items() if name in need for d in ids]
+        if st.chart:   # 코드가 붙이는 사주 요약(용신 의미·오행 방위)의 근거
+            extra += [d for d in SUMMARY_RULE_DOCS if d not in extra]
         if "saju_agent" in need or extra:
             # 해석 근거가 필요한 질문은 규칙 문서를 먼저 검색해 에이전트에게 함께 넘긴다 (RAG)
             rules = tools.pre_retrieve_rules(s["masked"], extra_ids=extra)
@@ -416,6 +436,57 @@ class SajuPlannerApp:
                                 doc_ids=move_ids))
         return claims
 
+    @staticmethod
+    def _place_facts(place_id: str, month: int | None = None) -> tuple[str, list[str]]:
+        """장소가 사용자 용신과 맞는 이유 (장소 DB 값만): 이름과 [방위, 환경 특징, 용신 일치, 추천 월]."""
+        st = current_state()
+        place = next(p for p in tools.PLACES if p["id"] == place_id)
+        hit = [e for e in place["elements"] if e in set(st.chart["yongsin_elements"])]
+        facts = [f"{place['direction']}쪽"]
+        if place.get("env_tags"):
+            facts.append("·".join(place["env_tags"][:3]))
+        facts.append(f"용신 {'·'.join(hit)} 기운" if hit else f"{'·'.join(place['elements'])} 기운(용신과 겹치지 않음)")
+        best = place.get("best_months") or []
+        if month and best:
+            facts.append(f"{month}월 추천 시기" if month in best else f"추천 시기 {', '.join(map(str, best))}월")
+        return place["name"], facts
+
+    def _summary_claims(self) -> list[Claim]:
+        """사주 요약(원국·일간·용신과 그 의미·세운·12개월 흐름)을 사주 계산 결과로 만든다 (LLM 없이)."""
+        st = self._state()
+        ch = st.chart
+        if not ch:
+            return []
+        saju = ["mcp:saju"]
+        pillars = ", ".join(f"{PILLAR_KO.get(k, k)} {v}" for k, v in ch["pillars"].items())
+        day_el = tools.STEM_ELEMENT[ch["day_stem"]]
+        claims = [Claim(section="사주 요약",
+                        text=f"원국은 {pillars}입니다. 일간은 {ch['day_stem']}{day_el}이고 일지는 {ch['day_branch']}이며, "
+                             f"{STRENGTH_KO.get(ch['strength'], ch['strength'] + '한')} 사주로 {ch['geukguk']}입니다.",
+                        doc_ids=saju)]
+        ys = [f"{s}{tools.STEM_ELEMENT[s]}" for s in ch["yongsin"]]
+        traits = "; ".join(f"{e}{josa(e, '은', '는')} {ELEMENT_TRAITS[e][0]}·{ELEMENT_TRAITS[e][1]}·{ELEMENT_TRAITS[e][2]}"
+                           for e in ch["yongsin_elements"])
+        basis = saju + [d for d in SUMMARY_RULE_DOCS if d in st.contexts]
+        claims.append(Claim(section="사주 요약",
+                            text=f"용신은 {', '.join(ys)}입니다. 용신은 사주에서 넘치거나 부족한 기운을 조절해 균형을 잡는 오행이라, "
+                                 f"그 오행의 방위·계절·환경을 가까이하면 도움이 됩니다({traits}).",
+                            doc_ids=basis))
+        months = ch["months"]
+        years = list(dict.fromkeys(m["year_ganzhi"] for m in months))
+        year_txt = []
+        for y in years:
+            hit = [e for e in dict.fromkeys((tools.STEM_ELEMENT[y[0]], tools.BRANCH_ELEMENT[y[1]])) if e in ch["yongsin_elements"]]
+            year_txt.append(f"{y}년" + (f"(용신 {'·'.join(hit)}{josa(hit[-1], '과', '와')} 맞음)" if hit else ""))
+        good = [m for m in months if m["good_month"]]
+        clash = [m for m in months if m["clash_with_day_branch"]]
+        flow = (f"조회 범위({months[0]['start_date']} ~ {months[-1]['end_date']})의 세운은 {', '.join(year_txt)}입니다. "
+                f"12개 절기 월 중 용신 기운이 들어오는 좋은 달은 {len(good)}개({', '.join(m['month_ganzhi'] + '월' for m in good) or '없음'})이고, "
+                + (f"일지와 충하는 주의 달은 {', '.join(m['month_ganzhi'] + '월' for m in clash)}입니다." if clash
+                   else "일지와 충하는 달은 없습니다."))
+        claims.append(Claim(section="사주 요약", text=flow, doc_ids=saju))
+        return claims
+
     def _plan_claims(self) -> list[Claim]:
         """evaluate_plan 결과로 계획별 평가 문장을 만든다 (LLM 없이: 절기 월 매핑·등급·근거·대안)."""
         st = self._state()
@@ -425,7 +496,8 @@ class SajuPlannerApp:
         claims = []
         for r in st.plan_results:
             plan = r["plan"]
-            what = "이사" if plan["kind"] == "move" else f"{plan['place']} 여행" if plan.get("place") else "여행"
+            act = plan.get("activity") or ("이사" if plan["kind"] == "move" else "여행")
+            what = f"{plan['place']} {act}" if plan.get("place") else act
             ids = [d for d in ("mcp:saju", "tool:evaluate_plan", r.get("basis")) if d and d in st.contexts]
             label = f"{plan['year']}년 " if plan.get("year") else ""
             label += f"{plan['month']}월 {what}"
@@ -440,19 +512,23 @@ class SajuPlannerApp:
             if r["clash_with_day_branch"]:
                 why.append("일지와 충하는 달이라 큰 변화는 신중해야 합니다.")
             if r.get("place_id"):
-                place = next(p for p in tools.PLACES if p["id"] == r["place_id"])
-                hit = "·".join(e for e in place["elements"] if e in ys)
-                kind = f"용신 {hit} 기운이 있는 곳" if hit else "용신 오행과 겹치지 않는 곳"
-                why.append(f"{place['name']}{josa(place['name'], '은', '는')} 장소 DB에서 {kind}입니다.")
+                name, facts = self._place_facts(r["place_id"], plan["month"])
+                why.append(f"{name}{josa(name, '은', '는')} {', '.join(facts)}인 곳입니다.")
                 if r["place_id"] in st.contexts:
                     ids.append(r["place_id"])
+            elif r.get("province"):
+                why.append(f"{r['province']}{josa(r['province'], '은', '는')} 장소 DB의 한 장소가 아니어서 달의 기운으로 평가했습니다.")
             elif plan.get("place"):
                 why.append(f"{plan['place']}{josa(plan['place'], '은', '는')} 장소 DB에 없어 달의 기운만으로 평가했습니다.")
             text = (f"{label}{josa(what, '은', '는')} {span}에 해당하며 평가는 '{r['rating']}'입니다. "
                     + " ".join(why))
             alts = [a for a in r.get("alternatives") or [] if a["id"] in st.contexts][:2]
-            if alts:
-                text += f" 대안으로 {', '.join(a['name'] for a in alts)}도 고려해 보세요."   # 장소 DB 안의 대안만
+            if alts:   # 장소 DB 안의 대안만, 고른 이유와 함께
+                items = [self._place_facts(a["id"], plan["month"]) for a in alts]
+                listed = ", ".join(f"{n}({', '.join(f)})" for n, f in items)
+                last = items[-1][0]
+                text += (f" {r['province']} 안에서는 {listed}{josa(last, '이', '가')} 용신에 맞습니다." if r.get("province")
+                         else f" 대안으로 {listed}{josa(last, '을', '를')} 고려해 보세요.")
                 ids += [a["id"] for a in alts]
             if r.get("better_move_months"):
                 months = {m["month_ganzhi"]: m for m in st.chart["months"]}
@@ -467,12 +543,14 @@ class SajuPlannerApp:
         feedback = ""
         if s.get("violations"):
             feedback = "\n[이전 답변의 위반 사항 - 반드시 고칠 것]\n" + "\n".join(f"- {v}" for v in s["violations"]) + "\n"
-        travel_note = ("19. 월별 여행지 목록(달마다 국내·해외 추천)은 시스템이 '여행 추천' 섹션 끝에 표로 붙인다. "
+        travel_note = ("21. 월별 여행지 목록(달마다 국내·해외 추천)은 시스템이 '여행 추천' 섹션 끝에 표로 붙인다. "
                        "너는 여행 추천 섹션에 전체 경향을 요약하는 문장 1~2개만 쓰고, 달마다 장소를 나열하지 않는다."
                        if st.travel_picks else "")
         if st.plan_results and self._plan_only():
-            travel_note += ("\n20. 계획별 평가(절기 월 매핑, 좋음/보통/주의, 근거, 대안)는 시스템이 '계획 평가' 섹션으로 붙인다. "
-                            "너는 계획을 다시 평가하거나 여행지·주거지를 추천하지 말고, 필요하면 '안내' 섹션에 주의점만 쓴다.")
+            travel_note += ("\n22. 계획별 평가(절기 월 매핑, 좋음/보통/주의, 근거, 장소 특징, 대안)는 시스템이 '계획 평가' 섹션으로 붙인다. "
+                            "너는 계획을 다시 평가하거나 여행지·주거지를 추천하지 말고, '사주 해석' 섹션에 그 달 월운(십성)이 "
+                            "그 활동과 어떻게 어울리는지를, 필요하면 '안내' 섹션에 주의점을 쓴다. "
+                            "장소가 DB 에 있는지는 계획 평가 문장이 이미 밝히므로 다시 쓰지 않는다.")
         prompt = COMPOSE_PROMPT.format(feedback=feedback, question=s["masked"], contexts=ctx or "(없음)",
                                        reports=s.get("reports", ""), travel_note=travel_note)
         answer = await self.composer.ainvoke(prompt, {"callbacks": [TraceCallback(st)]})
@@ -502,6 +580,12 @@ class SajuPlannerApp:
             out.append("사주 요약이 있는데 생년월일을 다시 요청함")
         if BIRTH_GUESS_RE.search(c.text):
             out.append("가려진 출생 연·월을 짐작해 씀")
+        chart = self._state().chart
+        if chart:
+            ys = set(chart["yongsin_elements"])
+            said = {e for m in YONGSIN_CLAIM_RE.finditer(c.text) for e in re.findall(r"[木火土金水]", m.group(1))}
+            if said - ys:
+                out.append(f"용신이 아닌 오행({'·'.join(sorted(said - ys))})을 용신이라고 씀")
         if (GANZHI_CHARS & set(c.text) or DATE_RE.search(c.text)) and "mcp:saju" in known and "mcp:saju" not in c.doc_ids:
             out.append("간지·기간을 말하는데 mcp:saju 인용 없음")
         place = tools.lookup_place(c.text)
@@ -521,10 +605,11 @@ class SajuPlannerApp:
             def sub(match):
                 nonlocal fixed
                 right = canon.get(match.group(1))
-                if right and match.group(0) != right:
+                if not right:
+                    return match.group(0)
+                if DATE_RE.findall(match.group(0)) != DATE_RE.findall(right):   # 날짜가 다를 때만 교정으로 센다
                     fixed += 1
-                    return right
-                return match.group(0)
+                return right
             c.text = MONTH_RANGE_RE.sub(sub, c.text)
         return fixed
 
@@ -615,6 +700,12 @@ class SajuPlannerApp:
             if pos is None:
                 pos = max((i for i, c in enumerate(claims) if c.section == "사주 요약"), default=-1) + 1
             claims[pos:pos] = spans
+        summary = self._summary_claims()
+        if summary:
+            for c in claims:
+                if c.section == "사주 요약":
+                    c.section = "사주 해석"
+            claims[0:0] = summary
         notes = self._note_claims()
         for n in notes:
             pos = max((i for i, c in enumerate(claims) if c.section == n.section), default=-1)
@@ -629,6 +720,8 @@ class SajuPlannerApp:
         if source:
             claims.append(source)
         claims = self._check_code_claims(claims, {id(c) for c in s["answer"].claims})
+        # 검증은 한자 원문으로 마쳤으므로, 보여 주기 직전에 간지·오행을 '한글(한자)'로 바꾼다
+        claims = [c.model_copy(update={"text": annotate(c.text)}) for c in claims]
         return {"final": render_answer(StructuredAnswer(claims=claims), extra=extra, disclaimer=guards.DISCLAIMER)}
 
     def _check_code_claims(self, claims: list[Claim], llm_ids: set[int]) -> list[Claim]:

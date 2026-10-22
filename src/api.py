@@ -4,11 +4,14 @@
   Invoke-RestMethod -Uri http://localhost:8000/query -Method Post -ContentType "application/json; charset=utf-8" `
     -Body '{"question": "1988년 11월 3일 오전 7시 양력생 남성입니다. 내년 5월에 여행 어디로 가면 좋을까?"}'
 """
+import csv
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from src import config
@@ -16,7 +19,14 @@ from src import config
 INVALID_REQUEST_MESSAGE = f"question 은 1~{config.MAX_QUESTION_CHARS}자 문자열이어야 합니다. 예: {{\"question\": \"...\"}}"
 UNAVAILABLE_MESSAGE = "죄송합니다. 일시적인 오류로 답변을 만들지 못했습니다. 잠시 후 다시 시도해 주세요."
 
+WEB_DIST = config.PROJECT_ROOT / "web" / "dist"   # React 테스트 화면 빌드 결과 (cd web && npm run build)
+EXAMPLES_CSV = config.PROJECT_ROOT / "evaluation" / "test_queries.csv"
+NO_WEB_HTML = ("<!doctype html><meta charset='utf-8'><title>사주 라이프 플래너</title>"
+               "<p>웹 화면이 아직 빌드되지 않았습니다. <code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code> "
+               "후 서버를 다시 시작하세요. API 는 <code>POST /query</code> 로 바로 쓸 수 있습니다.</p>")
+
 app_state: dict = {}
+log = logging.getLogger("saju.api")
 
 
 @asynccontextmanager
@@ -59,11 +69,42 @@ def _json(content: dict, status: int = 200) -> JSONResponse:
 async def query(q: Query):
     try:
         result = await app_state["app"].run_query(q.question)
-    except Exception:   # Bedrock 장애 등: 원인 메시지(입력 일부가 섞일 수 있음)는 응답에 싣지 않는다
-        return _json({"answer": UNAVAILABLE_MESSAGE, "contexts": [], "trace": []}, 503)
+    except Exception as e:   # Bedrock 장애 등: 원인 메시지(입력 일부가 섞일 수 있음)는 싣지 않고 종류만 남긴다
+        etype = error_type(e)
+        log.warning("query failed: %s", etype)
+        return _json({"answer": UNAVAILABLE_MESSAGE, "contexts": [], "trace": [], "error_type": etype}, 503)
     return _json(result)
+
+
+def error_type(e: BaseException) -> str:
+    """예외 사슬에서 AWS 오류 코드(예: ThrottlingException)를 찾고, 없으면 예외 클래스 이름을 돌려준다."""
+    seen, cur = set(), e
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        code = (getattr(cur, "response", None) or {}).get("Error", {}).get("Code")
+        if code:
+            return str(code)
+        cur = cur.__cause__ or cur.__context__
+    return type(e).__name__
 
 
 @api.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@api.get("/examples")
+async def examples():
+    """웹 화면의 예시 질문 목록 (평가셋 24건의 id·category·input, 가짜 출생 정보만 담김)."""
+    with open(EXAMPLES_CSV, encoding="utf-8-sig") as f:
+        rows = [{"id": int(r["id"]), "category": r["category"], "input": r["input"]} for r in csv.DictReader(f)]
+    return _json({"reference_date": config.REFERENCE_DATE, "examples": rows})
+
+
+# 웹 화면: 빌드 결과가 있으면 / 에서 서빙한다 (API 경로가 먼저 매칭되도록 맨 마지막에 붙인다)
+if (WEB_DIST / "index.html").exists():
+    api.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
+else:
+    @api.get("/", response_class=HTMLResponse)
+    async def no_web():
+        return NO_WEB_HTML
