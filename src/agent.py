@@ -47,12 +47,32 @@ SAJU_RE = re.compile(r"운세|용신|오행|십성|기운|좋은\s*달|조심|�
 RULE_DOCS_BY_AGENT = {
     "travel_agent": ["rule:direction:oheng", "rule:travel:timing"],
     "plan_agent": ["rule:travel:plan-rating", "rule:residence:move-timing"],
+    "residence_agent": ["rule:residence:selection", "rule:residence:move-timing"],
 }
 # 답변 섹션 표시 순서
 SECTION_ORDER = {name: i for i, name in enumerate(
     ["사주 요약", "월별 운세", "계획 평가", "여행 추천", "주거 추천", "이사 시기", "안내", "근거 자료"])}
+AGENT_MAX_TOKENS = 1500   # 전문 에이전트 보고 길이 상한
 # 계획 전용 질문에서 코드가 만든 '계획 평가'로 대체하는 작성자 섹션
 PLAN_REPLACED_SECTIONS = {"계획 평가", "여행 추천", "이사 시기", "주거 추천"}
+
+
+def one_handoff_at_a_time(state: dict) -> dict:
+    """Supervisor 가 넘기기를 한꺼번에 여러 개 부르면 하나만 실행되고 같은 넘기기가 되풀이된다.
+
+    Bedrock 은 parallel_tool_calls 끄기를 지원하지 않으므로, 아직 보고하지 않은 에이전트로의 넘기기 하나만 남긴다.
+    모두 보고했으면 넘기기를 지우고 끝낸다.
+    """
+    messages = state["messages"]
+    last = messages[-1]
+    calls = getattr(last, "tool_calls", None) or []
+    if len(calls) <= 1 and not any(c["name"].startswith("transfer_to_") for c in calls):
+        return {}
+    reported = {m.name for m in messages if isinstance(m, AIMessage) and m.name not in (None, "supervisor")}
+    todo = [c for c in calls if c["name"].removeprefix("transfer_to_") not in reported]
+    if len(todo) == len(calls) == 1:
+        return {}
+    return {"messages": [last.model_copy(update={"tool_calls": todo[:1], "content": "" if todo else "완료"})]}
 
 
 def required_agents(question: str) -> list[str]:
@@ -115,7 +135,9 @@ COMMON_RULES = """[공통 규칙]
 - 죽음·질병·사고·이혼을 단정하지 않는다. 부정적 흐름은 '주의할 점'으로 바꿔 말한다.
 - 부동산은 지역의 기운과 이사 시기까지만 말한다. 시세·집값 전망·매수·매도·청약·대출·투자는 말하지 않는다.
 - 사주 요약이 없으면(출생 정보 없음) 개인 맞춤 추천을 하지 말고 생년월일이 필요하다고 보고한다.
-- 보고는 한국어 짧은 bullet 로 하고, 각 사실 뒤에 근거 doc_id 를 [doc_id] 형태로 붙인다
+- 사주 요약이 있으면 출생 시각 등 정보를 다시 요구하지 말고 그대로 도구를 호출한다(시각 미상은 시주 제외로 이미 반영됨).
+- 보고는 한국어 짧은 bullet 15개 이내로, 도구 결과의 핵심 사실만 쓴다(인사말·이모지·표·전체 계획 재작성 금지).
+  각 사실 뒤에 근거 doc_id 를 [doc_id] 형태로 붙인다
   (예: [mcp:saju], [rule:yongsin:overview], [T-OS-SAPPORO], [tool:evaluate_plan])."""
 
 SAJU_PROMPT = f"""너는 사주 해석 전문가(saju_agent)다. 용신·오행·십성의 의미, 좋은 달과 조심할 달, 특정 기간의 운,
@@ -214,15 +236,18 @@ class SajuPlannerApp:
     # ---- 구성 ----
     def _build_supervisor(self):
         model = llm()
+        # 전문 에이전트 보고는 작성자가 다시 정리하므로 짧게 받는다 (긴 보고는 1년 계획에서 180초 초과의 원인)
+        agent_model = llm(max_tokens=AGENT_MAX_TOKENS)
         self.agents = {
-            "saju_agent": create_react_agent(model, tools.SAJU_TOOLS, prompt=SAJU_PROMPT, name="saju_agent"),
-            "travel_agent": create_react_agent(model, tools.TRAVEL_TOOLS, prompt=TRAVEL_PROMPT, name="travel_agent"),
-            "residence_agent": create_react_agent(model, tools.RESIDENCE_TOOLS, prompt=RESIDENCE_PROMPT,
+            "saju_agent": create_react_agent(agent_model, tools.SAJU_TOOLS, prompt=SAJU_PROMPT, name="saju_agent"),
+            "travel_agent": create_react_agent(agent_model, tools.TRAVEL_TOOLS, prompt=TRAVEL_PROMPT,
+                                               name="travel_agent"),
+            "residence_agent": create_react_agent(agent_model, tools.RESIDENCE_TOOLS, prompt=RESIDENCE_PROMPT,
                                                   name="residence_agent"),
-            "plan_agent": create_react_agent(model, tools.PLAN_TOOLS, prompt=PLAN_PROMPT, name="plan_agent"),
+            "plan_agent": create_react_agent(agent_model, tools.PLAN_TOOLS, prompt=PLAN_PROMPT, name="plan_agent"),
         }
         return create_supervisor(list(self.agents.values()), model=model, prompt=SUPERVISOR_PROMPT,
-                                 output_mode="last_message").compile()
+                                 output_mode="last_message", post_model_hook=one_handoff_at_a_time).compile()
 
     def _build_graph(self):
         g = StateGraph(QueryState)
@@ -302,21 +327,26 @@ class SajuPlannerApp:
             if isinstance(m, AIMessage) and getattr(m, "name", None) not in (None, "supervisor") and get_text(m).strip():
                 reports.append(f"## {m.name}\n{get_text(m)}")
                 done.add(m.name)
-        # Supervisor 가 필수 에이전트를 건너뛰었으면 직접 호출해 보완한다
-        for name in need:
-            if name in done:
-                continue
+        # Supervisor 가 필수 에이전트를 건너뛰었으면 직접 호출해 보완한다 (서로 독립이므로 동시에 실행)
+        async def fallback(name: str) -> str | None:
             st.add_step(f"agent:{name}", "fallback", "Supervisor 누락 보완", type="agent", name=name)
             sub = await self.agents[name].ainvoke({"messages": [HumanMessage(content=content)]}, callbacks)
             last = next((m for m in reversed(sub["messages"]) if isinstance(m, AIMessage) and get_text(m).strip()), None)
-            if last:
-                reports.append(f"## {name}\n{get_text(last)}")
+            return f"## {name}\n{get_text(last)}" if last else None
+
+        missing = [name for name in need if name not in done]
+        reports += [r for r in await asyncio.gather(*(fallback(n) for n in missing)) if r]
         # 여행 추천이 필요한데 월별 추천 도구가 불리지 않았으면 규칙대로 직접 계산한다
         if "travel_agent" in need and st.chart and not st.travel_picks:
             scope = "domestic" if "국내" in s["masked"] and "해외" not in s["masked"] else \
                 "overseas" if "해외" in s["masked"] and "국내" not in s["masked"] else "both"
             await tools.recommend_travel.ainvoke({"month_indices": indices or list(range(1, 13)), "scope": scope})
             st.add_step("agent:travel_agent", "fallback", "recommend_travel 직접 호출", type="agent", name="travel_agent")
+        # 주거 추천이 필요한데 recommend_residence 가 불리지 않았으면 규칙대로 직접 계산한다
+        if "residence_agent" in need and st.chart and st.residence is None:
+            await tools.recommend_residence.ainvoke({})
+            st.add_step("agent:residence_agent", "fallback", "recommend_residence 직접 호출", type="agent",
+                        name="residence_agent")
         return {"reports": "\n\n".join(reports) or "(보고 없음)"}
 
     def _travel_claims(self) -> list[Claim]:
@@ -355,6 +385,36 @@ class SajuPlannerApp:
                                      f"{josa(last, '을', '를')} 추천합니다.{note}",
                                 doc_ids=ids))
         return claims if len(claims) > 1 else []
+
+    def _residence_claims(self) -> list[Claim]:
+        """recommend_residence 결과로 주거 Top 3·이사 시기 문장을 만든다 (LLM 없이, 시세·투자 표현 없음)."""
+        st = self._state()
+        res = st.residence
+        if not st.chart or not res:
+            return []
+        ys = set(st.chart["yongsin_elements"])
+        months = {m["month_ganzhi"]: m for m in st.chart["months"]}
+        basis = [d for d in ("mcp:saju", "rule:residence:selection") if d in st.contexts]
+        claims = []
+        for rank, r in enumerate(res["top3"], 1):
+            place = next((p for p in tools.PLACES if p["id"] == r["id"]), {})
+            match = "·".join(e for e in r["elements"] if e in ys)
+            aspect = f"용신 {match} 기운" if match else f"{r['elements'][0]} 기운"
+            feature = "·".join((place.get("env_tags") or [])[:2])
+            claims.append(Claim(section="주거 추천",
+                                text=f"{rank}위 {r['name']}: {r['direction']} 방위에 {aspect}이 있고"
+                                     + (f" {feature}{josa(feature, '이', '가')} 있는" if feature else "") + " 지역입니다.",
+                                doc_ids=basis + ([r["id"]] if r["id"] in st.contexts else [])))
+        span = lambda g: f"{g}월({months[g]['start_date']} ~ {months[g]['end_date']})"
+        move_ids = [d for d in ("mcp:saju", "rule:residence:move-timing") if d in st.contexts]
+        if res["good"]:
+            claims.append(Claim(section="이사 시기", text=f"이사하기 좋은 달은 {', '.join(span(g) for g in res['good'])}입니다.",
+                                doc_ids=move_ids))
+        if res["avoid"]:
+            claims.append(Claim(section="이사 시기",
+                                text=f"{', '.join(span(a) for a in res['avoid'])}은 일지와 충하는 달이라 이사를 피하는 것이 좋습니다.",
+                                doc_ids=move_ids))
+        return claims
 
     def _plan_claims(self) -> list[Claim]:
         """evaluate_plan 결과로 계획별 평가 문장을 만든다 (LLM 없이: 절기 월 매핑·등급·근거·대안)."""
@@ -537,6 +597,12 @@ class SajuPlannerApp:
             claims = [c for c in claims if not (c.section == "여행 추천" and
                                                 (MONTH_RANGE_RE.search(c.text) or tools.lookup_place(c.text, "travel")
                                                  or SOLAR_MONTH_RE.search(c.text)))]
+        residence = self._residence_claims() if "residence_agent" in self._state().route else []
+        if residence:
+            claims = [c for c in claims if not (
+                (c.section == "주거 추천" and tools.lookup_place(c.text, "region")) or
+                (c.section == "이사 시기" and (MONTH_RANGE_RE.search(c.text) or SOLAR_MONTH_RE.search(c.text))))]
+            claims += residence
         plan = self._plan_claims() if self._plan_only() else []
         if plan:
             claims = [c for c in claims if c.section not in PLAN_REPLACED_SECTIONS]

@@ -160,6 +160,18 @@ class TestDeterministicClaims(unittest.TestCase):
         self.assertTrue(SOLAR_MONTH_RE.search("8월부터 10월까지 세 달이 좋습니다"))
         self.assertFalse(SOLAR_MONTH_RE.search("乙巳월(2027-05-06 ~ 2027-06-05)"))
 
+    def test_residence_claims_top3_and_move_months(self):
+        st = make_state()
+        st.chart = {**CHART, "good_move_months": ["己亥"], "avoid_move_months": []}
+        st.add_context("R-SEOUL-JONGNO", "서울 종로구 ...", "tool", "place")
+        st.residence = {"top3": [{"id": "R-SEOUL-JONGNO", "name": "서울 종로구", "direction": "북", "elements": ["土", "木"]}],
+                        "good": ["己亥"], "avoid": []}
+        claims = self.app._residence_claims()
+        self.assertIn("1위 서울 종로구: 북 방위에 용신 木 기운이 있고", claims[0].text)
+        self.assertIn("己亥월(2026-11-07 ~ 2026-12-06)", claims[1].text)
+        for c in claims:
+            self.assertEqual(self.app._claim_violations(c, set(st.contexts)), [], c.text)
+
     def test_failing_code_claim_dropped_at_runtime(self):
         st = make_state()
         llm = Claim(section="안내", text="참고용 안내입니다.", doc_ids=[])
@@ -173,6 +185,24 @@ class TestDeterministicClaims(unittest.TestCase):
         st = make_state()
         return any("출생" in x for x in self.app._claim_violations(Claim(section="사주 요약", text=text, doc_ids=["mcp:saju"]),
                                                                    set(st.contexts)))
+
+
+class TestSupervisorHandoff(unittest.TestCase):
+    """Supervisor 의 동시 넘기기를 아직 보고하지 않은 에이전트 하나로 줄인다 (반복 넘기기 방지)."""
+
+    def test_one_pending_handoff_kept(self):
+        from langchain_core.messages import AIMessage, HumanMessage
+        from src.agent import one_handoff_at_a_time
+        tc = lambda n: {"name": f"transfer_to_{n}", "args": {}, "id": n, "type": "tool_call"}
+        calls = AIMessage(content="", tool_calls=[tc("saju_agent"), tc("travel_agent")], id="s1", name="supervisor")
+        first = one_handoff_at_a_time({"messages": [HumanMessage("q"), calls]})["messages"][0]
+        self.assertEqual([c["name"] for c in first.tool_calls], ["transfer_to_saju_agent"])
+        self.assertEqual(first.id, "s1")   # 같은 id 로 교체된다
+        done = AIMessage(content="보고", name="saju_agent")
+        nxt = one_handoff_at_a_time({"messages": [HumanMessage("q"), done, calls]})["messages"][0]
+        self.assertEqual([c["name"] for c in nxt.tool_calls], ["transfer_to_travel_agent"])
+        again = AIMessage(content="", tool_calls=[tc("saju_agent")], id="s2", name="supervisor")
+        self.assertEqual(one_handoff_at_a_time({"messages": [done, again]})["messages"][0].tool_calls, [])
 
 
 class TestNoTagLeak(unittest.TestCase):

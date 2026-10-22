@@ -459,6 +459,8 @@ async def recommend_residence(sido: str | None = None) -> str:
         args["sido"] = sido
     cands = await _search("search_regions", args)
     months = {m["month_ganzhi"]: f"{m['month_ganzhi']}월 {m['start_date']}~{m['end_date']}" for m in chart["months"]}
+    current().residence = {"top3": [_brief(c) for c in cands], "good": list(chart["good_move_months"]),
+                           "avoid": list(chart["avoid_move_months"])}
     return json.dumps({
         "top3": [_brief(c) for c in cands],
         "good_move_months": [months[g] for g in chart["good_move_months"]],

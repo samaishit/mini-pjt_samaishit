@@ -106,8 +106,11 @@ constraints:
   is added only when the question contains a plan); a plan evaluation (a stated month
   plus 여행/이사 asking 괜찮을까/어때/해도 될까) calls plan_agent, plus saju_agent when saju
   terms appear; any other question calls only the matching specialist(s); answer
-  schema sections are optional; when the Supervisor skips a required specialist, the
-  graph calls it directly'
+  schema sections are optional; the Supervisor hands off to one not-yet-reported
+  specialist at a time (a post-model hook trims parallel handoffs, since Bedrock cannot
+  disable parallel tool calls); when the Supervisor skips a required specialist, the
+  graph calls the skipped ones directly and concurrently, and if recommend_travel or
+  recommend_residence was still not called, the graph calls it itself'
 - 'Implementation mechanics moved out of the acceptance criteria: retriever.py imports
   no LLM module; trace step names, masking and 300-char truncation follow the trace
   constraint above'
@@ -149,7 +152,8 @@ constraints:
   ids or search tool output); violations trigger regeneration or the claim is dropped
 - 'Answers are composed in two layers. Code builds the claims that come straight from
   tool results: the monthly travel table from recommend_travel (with a 용신 basis line,
-  each pick''s direction, 용신 match and place features), plan ratings from evaluate_plan
+  each pick''s direction, 용신 match and place features), the residence Top 3 with good
+  and avoid move months from recommend_residence, plan ratings from evaluate_plan
   (solar month -> 절기 month, 좋음/보통/주의, reasons, DB alternatives or better move months),
   date spans split at 절입일, saju notes (lunar, leap month, unknown time, season definition)
   and the rule-source line. The LLM writes only section summaries; when code claims

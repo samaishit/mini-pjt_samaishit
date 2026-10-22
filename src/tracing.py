@@ -61,6 +61,7 @@ class RequestState:
     plan_results: list[dict] = field(default_factory=list)    # evaluate_plan 결과 (계획 평가 문장은 코드가 만든다)
     route: list[str] = field(default_factory=list)            # 의도 라우터가 고른 필수 에이전트
     date_spans: list[dict] = field(default_factory=list)      # 질문의 날짜 구간을 절기 월로 나눈 결과
+    residence: dict | None = None                             # recommend_residence 결과 (주거 Top 3·이사 시기 문장은 코드가 만든다)
     started: float = field(default_factory=time.perf_counter)
 
     def add_step(self, step: str, input: Any = "", output: Any = "", type: str | None = None,
