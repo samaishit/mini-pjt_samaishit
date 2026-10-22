@@ -1,5 +1,5 @@
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { SajuMarkdown } from "./SajuMarkdown";
 import { classify, DOC_TYPE_LABELS, REFUSAL_LABELS, type QueryResponse } from "../api";
 
 interface Props {
@@ -33,9 +33,9 @@ export function ResultView({ data, status, elapsedMs }: Props) {
         <span className="spacer" />
         <span className="muted">{(elapsedMs / 1000).toFixed(1)}초</span>
       </header>
-      <article className={`answer kind-${kind.kind}`}>
-        <ReactMarkdown>{data.answer}</ReactMarkdown>
-      </article>
+      <div className={`answer kind-${kind.kind}`}>
+        <SajuMarkdown>{data.answer}</SajuMarkdown>
+      </div>
 
       <nav className="tabs" role="tablist">
         <button role="tab" aria-selected={tab === "trace"} className={tab === "trace" ? "on" : ""}

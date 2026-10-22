@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { SajuMarkdown } from "./SajuMarkdown";
 import { CLIENT_TIMEOUT_MS, endChat, foldedMarkdown, postChat, type ChatResponse, type ChatSession } from "../api";
 import { birthSentence, MAX_QUESTION_CHARS, validateBirth, type BirthFields } from "../composer";
 import { BirthForm } from "./BirthForm";
@@ -101,7 +101,7 @@ export function ChatView() {
 
   return (
     <div className="chat">
-      <aside className="panel memory">
+      <article className="panel memory">
         <div className="memory-head">
           <strong>대화 기억</strong>
           <span className="spacer" />
@@ -125,15 +125,15 @@ export function ChatView() {
         {!hasChart && (
           <>
             <label className="check">
-              <input type="checkbox" checked={attachBirth} onChange={(e) => setAttachBirth(e.target.checked)} />
+              <input type="checkbox" role="switch" checked={attachBirth} onChange={(e) => setAttachBirth(e.target.checked)} />
               첫 메시지에 출생 정보 붙이기
             </label>
             {attachBirth && <BirthForm value={birth} onChange={setBirth} />}
           </>
         )}
-      </aside>
+      </article>
 
-      <section className="panel thread">
+      <article className="panel thread">
         <div className="messages" aria-live="polite">
           {!messages.length && (
             <div className="placeholder muted">
@@ -158,7 +158,7 @@ export function ChatView() {
                         m.data.view.hidden_out_of_focus ? `다른 섹션 ${m.data.view.hidden_out_of_focus}건` : ""]
                         .filter(Boolean).join(", ")}
                     </summary>
-                    <div className="answer folded-body"><ReactMarkdown>{foldedMarkdown(m.data.view)}</ReactMarkdown></div>
+                    <div className="answer folded-body"><SajuMarkdown>{foldedMarkdown(m.data.view)}</SajuMarkdown></div>
                   </details>
                 )}
               </div>
@@ -190,10 +190,10 @@ export function ChatView() {
                         if (canSend) send();
                       }
                     }} />
-          <button type="button" className="primary" disabled={!canSend} onClick={() => send()}>보내기</button>
+          <button type="button" disabled={!canSend} onClick={() => send()} aria-busy={loading}>보내기</button>
         </div>
         {useBirth && input.trim() && <p className="muted small">보낼 문장: {outgoing}</p>}
-      </section>
+      </article>
     </div>
   );
 }

@@ -64,7 +64,7 @@ export function BirthForm({ value: b, onChange }: Props) {
                  }} />
         </label>
         <label className="check">
-          <input type="checkbox" checked={!b.timeKnown} onChange={(e) => set("timeKnown", !e.target.checked)} />
+          <input type="checkbox" role="switch" checked={!b.timeKnown} onChange={(e) => set("timeKnown", !e.target.checked)} />
           시각 모름
         </label>
       </div>

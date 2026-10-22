@@ -48,9 +48,7 @@ export function StreamProgress({ progress, elapsedMs, onCancel, compact }: Props
         {onCancel && <button type="button" className="ghost" onClick={onCancel}>취소</button>}
       </div>
 
-      <div className="sp-bar" aria-label={`진행률 ${Math.round(shown)}%`}>
-        <div className="sp-fill" style={{ width: `${shown}%` }} />
-      </div>
+      <progress className="sp-bar" value={Math.round(shown)} max={100} aria-label={`진행률 ${Math.round(shown)}%`} />
 
       <ol className="sp-stages">
         {STAGES.map((s) => {
@@ -82,7 +80,7 @@ export function StreamProgress({ progress, elapsedMs, onCancel, compact }: Props
       )}
 
       <p className="sp-tip muted small">
-        <span className="badge">기다리는 동안</span> {TIPS[tip]}
+        <span className="badge">명리 한 줄</span> {TIPS[tip]}
       </p>
       <p className="muted small sp-hint">
         {slow ? "1년 전체 계획처럼 전문가 여러 명이 함께 보는 질문은 1분 가까이 걸릴 수 있어요."

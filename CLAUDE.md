@@ -21,6 +21,7 @@
 | API | FastAPI + uvicorn | 설치 시점 버전으로 고정 |
 | 평가 | `ragas` (Bedrock LLM·Titan 임베딩 래핑) + LLM 심사 | Day 8 설치 시험 후 고정. 안 되면 3.12 평가 전용 venv → 자체 구현 지표 순으로 대체 |
 | 구조화 출력 | `pydantic` | 2.14.1 |
+| 웹 화면 | React + Vite, Pico CSS(디자인 시스템), Pretendard·Noto Serif KR(OFL, npm 번들) | 18.3.1 / 5.4.11, `@picocss/pico` 2.1.1 |
 
 ## 디렉터리 구조 (과정 규약 §4-1 기준)
 

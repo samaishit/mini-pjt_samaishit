@@ -5,6 +5,7 @@ import { BirthForm } from "./components/BirthForm";
 import { ChatView } from "./components/ChatView";
 import { ResultView } from "./components/ResultView";
 import { StreamProgress } from "./components/StreamProgress";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { INITIAL_PROGRESS, postQueryStream, reduceProgress, type Progress } from "./stream";
 
 const DEFAULT_BIRTH: BirthFields = {
@@ -97,12 +98,17 @@ export default function App() {
 
   return (
     <div className="page">
+      <div className="brand-band" aria-hidden title="오방색: 목·화·토·금·수" />
       <header className="top">
-        <h1>사주 라이프 플래너</h1>
-        <p className="muted">
-          출생 정보와 질문 하나로 12개 절기 월의 운을 계산해 여행지·주거지·계획 적합도를 근거와 함께 답합니다.
-          {referenceDate && <> 기준일 <strong>{referenceDate}</strong>.</>}
-        </p>
+        <div className="seal" aria-hidden><span>四</span><span>柱</span><span>生</span><span>活</span></div>
+        <div className="brand">
+          <h1>사주 라이프 플래너</h1>
+          <p>
+            타고난 사주와 앞으로 12개월의 흐름으로 여행지·살 곳·내 계획을 근거와 함께 짚어 드립니다.
+            {referenceDate && <> 기준일 <strong>{referenceDate}</strong></>}
+          </p>
+        </div>
+        <ThemeToggle />
       </header>
 
       <nav className="view-tabs" role="tablist" aria-label="화면">
@@ -118,7 +124,7 @@ export default function App() {
       </div>
 
       <main className="layout" hidden={view !== "single"}>
-        <section className="panel input-panel">
+        <article className="panel input-panel">
           <div className="seg mode" role="tablist" aria-label="입력 방식">
             <button role="tab" aria-selected={mode === "form"} className={mode === "form" ? "on" : ""}
                     onClick={() => setMode("form")}>폼 입력</button>
@@ -170,28 +176,35 @@ export default function App() {
             <span className="muted small">{finalQuestion.length} / {MAX_QUESTION_CHARS}</span>
             <span className="spacer" />
             {loading && <button type="button" className="ghost" onClick={() => abortRef.current?.abort()}>취소</button>}
-            <button type="button" className="primary" disabled={!canSend} onClick={send}>
+            <button type="button" disabled={!canSend} onClick={send} aria-busy={loading}>
               {loading ? "계산 중…" : "보내기"}
             </button>
           </div>
           <p className="muted small note">
             출생 정보는 이 요청에만 쓰이고 브라우저에 저장하지 않습니다. 서버는 생년월일을 &lt;BIRTH&gt;로 가린 뒤 LLM 에 보냅니다.
           </p>
-        </section>
+        </article>
 
-        <section className="panel output-panel">
+        <article className="panel output-panel">
           {loading && (
             <StreamProgress progress={progress} elapsedMs={elapsed} onCancel={() => abortRef.current?.abort()} />
           )}
           {error && <div className="error-box" role="alert">{error}</div>}
           {done && !loading && <ResultView data={done.data} status={done.status} elapsedMs={done.elapsedMs} />}
           {!loading && !error && !done && (
-            <div className="placeholder muted">
-              <p>왼쪽에서 출생 정보와 질문을 입력하고 <strong>보내기</strong>를 누르세요.</p>
-              <p className="small">답변 아래의 <em>처리 과정</em> 탭에서 가드 → 파서 → 사주 계산 → 라우팅 → 에이전트 → 출력 검증 단계를, <em>근거</em> 탭에서 인용된 문서를 볼 수 있습니다.</p>
+            <div className="placeholder">
+              <h3>이렇게 물어보세요</h3>
+              <ol>
+                <li>왼쪽에 생년월일·양력/음력·태어난 시각·성별을 넣습니다.</li>
+                <li>"내년 5월 여행지?", "1년 계획 짜줘", "12월 삿포로 여행 괜찮을까?"처럼 묻습니다.</li>
+                <li><strong>보내기</strong>를 누르면 사주를 계산해 근거와 함께 답합니다.</li>
+              </ol>
+              <p className="muted small">
+                답변 아래 <em>처리 과정</em> 탭에서 질문 확인 → 사주 계산 → 전문가 분석 → 근거 검증 단계를, <em>근거</em> 탭에서 인용한 문서를 볼 수 있습니다.
+              </p>
             </div>
           )}
-        </section>
+        </article>
       </main>
     </div>
   );
