@@ -39,6 +39,7 @@ mini-pjt_samaishit/
 │   ├── schemas.py        # 답변 Pydantic 모델 (claims[{text, doc_ids}])
 │   ├── llm.py            # Bedrock LLM 생성 + 한도 초과 시 대체 모델(MODEL_FALLBACKS) 재호출
 │   ├── hanja.py          # 간지·오행 한자 → '한글(한자)' 표기 (사용자 출력 직전)
+│   ├── glossary.py       # 답변에 나온 명리 용어의 일상어 풀이 (규칙 문서 doc_id 근거)
 │   └── config.py         # MODEL, MODEL_FALLBACKS, REFERENCE_DATE 등 상수
 ├── mcp_servers/
 │   ├── saju/             # mcp-saju 포크 (now 파라미터, get_luck_calendar)

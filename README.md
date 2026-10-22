@@ -6,7 +6,7 @@
 ## 활용한 패턴 (Day 1~7)
 | # | 패턴 | 활용 |
 |---|---|---|
-| 1 | LCEL + Pydantic 구조화 출력 (Day 1) | 최종 답변을 `StructuredAnswer{claims[{section, text, doc_ids}]}`로 생성 → 섹션별 렌더링 ([src/schemas.py](src/schemas.py)) |
+| 1 | LCEL + Pydantic 구조화 출력 (Day 1) | 최종 답변을 `StructuredAnswer{claims[{section, text, doc_ids}]}`로 생성 → 섹션별 렌더링 ([src/schemas.py](src/schemas.py)). 답변 구성: 한눈에 보기(일상어 결론) → 사주 요약(원국·용신과 의미·세운·12개월 흐름) → 질문별 섹션 → 용어 풀이(답변에 나온 명리 용어, 규칙 문서 근거) → 근거 자료. 간지·오행은 `무술(戊戌)월`처럼 한글(한자)로 표기 |
 | 2 | ReAct (Day 3) | 전문 에이전트 4종을 `create_react_agent`로 구성, 도구 자율 선택 |
 | 3 | RAG: 하이브리드 검색 + 쿼리 확장 (Day 2) | kiwi 형태소 BM25 + Chroma(Titan v2), EnsembleRetriever 0.2/0.8(가중치 비교로 결정) RRF c=60, 용신 오행 키워드 결정론 확장 ([src/retriever.py](src/retriever.py)) |
 | 4 | 도구 다중 (Day 4) | 사주 계산·여행/주거 추천·계획 평가·문서 검색 도구를 한 질의에 조합 |

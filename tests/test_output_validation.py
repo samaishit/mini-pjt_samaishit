@@ -4,6 +4,7 @@
 """
 import asyncio
 import unittest
+import unittest.mock
 
 from src import guards, tracing
 from src.agent import SajuPlannerApp
@@ -224,10 +225,29 @@ class TestSummaryAndReasons(unittest.TestCase):
         st = make_state()
         st.chart = self.chart()
         texts = [c.text for c in self.app._summary_claims()]
-        self.assertIn("원국은 연주 庚申, 월주 己丑, 일주 丙申, 시주 壬辰입니다. 일간은 丙火", texts[0])
+        self.assertIn("원국(타고난 사주 바탕)은 연주 庚申, 월주 己丑, 일주 丙申, 시주 壬辰입니다. '나'를 뜻하는 일간은 丙火", texts[0])
         self.assertIn("용신은 壬水, 己土입니다", texts[1])
+        self.assertIn("水는 북쪽·겨울, 바다·강·호수처럼 물이 있는 곳", texts[1])
         self.assertIn("좋은 달은 1개(己亥월)", texts[2])
         for c in self.app._summary_claims():
+            self.assertEqual(self.app._claim_violations(c, set(st.contexts)), [], c.text)
+
+    def test_glossary_explains_terms_in_answer_only(self):
+        from src.glossary import find_terms
+        text = "신약한 사주로 비겁격입니다. 乙巳월은 상관과 편재가 들어옵니다. 날씨와 상관없이 충분히 충전하세요."
+        names = [n for n, _, _ in find_terms(text, "비겁격")]
+        self.assertEqual(names, ["신강·신약", "비겁격", "식신·상관", "편재·정재"])   # '상관없이·충분·충전'은 용어가 아님
+        self.assertNotIn("비견·겁재", names)   # 격국 이름 속 '비겁'은 격국 풀이로만
+
+    def test_glossary_claims_cite_rule_docs_in_contexts(self):
+        st = make_state()
+        st.chart = self.chart()
+        with unittest.mock.patch("src.tools.attach_rule_docs", side_effect=lambda ids, reason: [
+                st.add_context(d, "규칙", "rag", "rule") or d for d in ids]):
+            claims = self.app._glossary_claims([Claim(section="사주 요약", text="용신은 壬水입니다. 일지와 충하는 달", doc_ids=[])])
+        self.assertEqual([c.doc_ids[0] for c in claims], ["rule:yongsin:overview", "rule:chunghap:yukchung"])
+        self.assertTrue(claims[0].text.startswith("용신: 내 사주에서"))
+        for c in claims:
             self.assertEqual(self.app._claim_violations(c, set(st.contexts)), [], c.text)
 
     def test_wrong_yongsin_element_flagged(self):

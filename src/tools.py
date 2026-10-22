@@ -373,6 +373,19 @@ async def _search(tool_name: str, args: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 # 에이전트 도구
 # ---------------------------------------------------------------------------
+def attach_rule_docs(doc_ids: list[str], reason: str) -> list[str]:
+    """이미 정해진 규칙 문서(예: 용어 풀이 근거)를 doc_id 로 contexts 에 넣는다. 넣은 doc_id 목록을 돌려준다."""
+    from src.retriever import load_all_docs
+    have = current().contexts
+    need = [d for d in dict.fromkeys(doc_ids) if d not in have]
+    if need:
+        by_id = {d.metadata["doc_id"]: d for d in load_all_docs()}
+        docs = [by_id[d] for d in need if d in by_id]
+        if docs:
+            _record_retrieval(reason, docs, "rule")
+    return [d for d in doc_ids if d in current().contexts]
+
+
 def _record_retrieval(query: str, docs, doc_type: str) -> list[dict]:
     rows = []
     for d in docs:

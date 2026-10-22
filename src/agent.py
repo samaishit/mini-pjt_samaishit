@@ -21,6 +21,7 @@ from langgraph_supervisor import create_supervisor
 
 from src import config, guards, tools
 from src.birth_parser import parse
+from src.glossary import find_terms
 from src.hanja import annotate
 from src.llm import make_llm
 from src.schemas import Claim, StructuredAnswer, render_answer, strip_doc_tags
@@ -55,16 +56,17 @@ RULE_DOCS_BY_AGENT = {
 # 사주 요약 문장의 근거 문서 (출생 정보가 있으면 항상 미리 검색 결과에 넣는다)
 SUMMARY_RULE_DOCS = ["rule:yongsin:overview", "rule:direction:oheng"]
 # 오행별 방위·계절·환경 (rule:direction:oheng 과 같은 내용)
-ELEMENT_TRAITS = {"木": ("동쪽", "봄", "숲·정원"), "火": ("남쪽", "여름", "햇볕·활기 있는 도심"),
-                  "土": ("중앙", "환절기", "평지·고도·유적"), "金": ("서쪽", "가을", "바위·산악"),
-                  "水": ("북쪽", "겨울", "바다·강·호수")}
+ELEMENT_TRAITS = {"木": "동쪽·봄, 숲과 정원처럼 푸르고 자라나는 곳", "火": "남쪽·여름, 햇볕이 잘 들고 활기 있는 곳",
+                  "土": "중앙·환절기, 평지나 오래된 유적처럼 안정된 곳", "金": "서쪽·가을, 바위산처럼 단단하고 맑은 곳",
+                  "水": "북쪽·겨울, 바다·강·호수처럼 물이 있는 곳"}
 STRENGTH_KO = {"weak": "신약한", "strong": "신강한", "neutral": "중화된", "balanced": "중화된"}
 # '용신 水·木' 처럼 용신이라고 말한 오행 (한자 또는 '수(水)' 표기)
 YONGSIN_CLAIM_RE = re.compile(r"용신\s*(?:인|은|는|이|의|중|으로)?\s*((?:[가-힣]\()?[木火土金水]\)?(?:\s*[·,]\s*(?:[가-힣]\()?[木火土金水]\)?)*)")
 PILLAR_KO = {"year": "연주", "month": "월주", "day": "일주", "hour": "시주"}
 # 답변 섹션 표시 순서
 SECTION_ORDER = {name: i for i, name in enumerate(
-    ["사주 요약", "사주 해석", "월별 운세", "계획 평가", "여행 추천", "주거 추천", "이사 시기", "안내", "근거 자료"])}
+    ["한눈에 보기", "사주 요약", "사주 해석", "월별 운세", "계획 평가", "여행 추천", "주거 추천", "이사 시기", "안내",
+     "용어 풀이", "근거 자료"])}
 AGENT_MAX_TOKENS = 1500   # 전문 에이전트 보고 길이 상한
 # 계획 전용 질문에서 코드가 만든 '계획 평가'로 대체하는 작성자 섹션
 PLAN_REPLACED_SECTIONS = {"계획 평가", "여행 추천", "이사 시기", "주거 추천"}
@@ -200,7 +202,11 @@ COMPOSE_PROMPT = """당신은 사주 라이프 플래너의 최종 답변 작성
 8. 시세·집값·매수·매도·청약·대출·투자 표현을 쓰지 않는다.
 9. 출생 시각 미상이면 시주를 제외했다는 안내를 넣는다. DB 외 장소, 조회 범위 밖이면 그 사실을 분명히 말한다.
 10. 동행자가 언급되면 본인 사주 기준이라고 밝힌다. 사주 요약이 없으면 생년월일을 요청하는 claim 하나만 쓴다.
-11. 섹션 이름은 '사주 해석', '월별 운세', '여행 추천', '주거 추천', '이사 시기', '계획 평가', '안내' 중에서 고른다.
+11. 섹션 이름은 '한눈에 보기', '사주 해석', '월별 운세', '여행 추천', '주거 추천', '이사 시기', '계획 평가', '안내' 중에서 고른다.
+    '한눈에 보기'에는 질문에 대한 결론을 claim 1~2개로 먼저 쓴다. 명리 용어(간지·십성·용신·오행 한자)와 YYYY-MM-DD 날짜 없이,
+    처음 보는 사람도 바로 알아듣는 일상어로 쓴다(예: "내년 5월은 바깥 활동과 여행에 힘이 실리는 달이라, 숲과 전통 문화가 있는
+    동쪽 여행지가 잘 맞습니다."). 달은 사용자가 말한 표현('내년 5월', '10월말')을 쓰고 절기 월 번호를 양력 월로 바꿔 쓰지 않는다.
+    한눈에 보기 claim 의 doc_ids 에는 mcp:saju 를 넣는다.
     '사주 요약'(원국·일간·용신·12개월 흐름)은 시스템이 붙이므로 쓰지 않는다. 질문과 관련된 해석(그 달 월운의 십성 의미,
     용신과의 관계)은 '사주 해석' 섹션에 쓴다.
 12. '당신'이라고 부르지 말고 주어를 생략하거나 '~님'처럼 정중하게 쓴다.
@@ -461,16 +467,16 @@ class SajuPlannerApp:
         pillars = ", ".join(f"{PILLAR_KO.get(k, k)} {v}" for k, v in ch["pillars"].items())
         day_el = tools.STEM_ELEMENT[ch["day_stem"]]
         claims = [Claim(section="사주 요약",
-                        text=f"원국은 {pillars}입니다. 일간은 {ch['day_stem']}{day_el}이고 일지는 {ch['day_branch']}이며, "
-                             f"{STRENGTH_KO.get(ch['strength'], ch['strength'] + '한')} 사주로 {ch['geukguk']}입니다.",
+                        text=f"원국(타고난 사주 바탕)은 {pillars}입니다. '나'를 뜻하는 일간은 {ch['day_stem']}{day_el}이고 "
+                             f"일지는 {ch['day_branch']}이며, {STRENGTH_KO.get(ch['strength'], ch['strength'] + '한')} 사주로 "
+                             f"{ch['geukguk']}입니다.",
                         doc_ids=saju)]
         ys = [f"{s}{tools.STEM_ELEMENT[s]}" for s in ch["yongsin"]]
-        traits = "; ".join(f"{e}{josa(e, '은', '는')} {ELEMENT_TRAITS[e][0]}·{ELEMENT_TRAITS[e][1]}·{ELEMENT_TRAITS[e][2]}"
-                           for e in ch["yongsin_elements"])
+        traits = "; ".join(f"{e}{josa(e, '은', '는')} {ELEMENT_TRAITS[e]}" for e in ch["yongsin_elements"])
         basis = saju + [d for d in SUMMARY_RULE_DOCS if d in st.contexts]
         claims.append(Claim(section="사주 요약",
-                            text=f"용신은 {', '.join(ys)}입니다. 용신은 사주에서 넘치거나 부족한 기운을 조절해 균형을 잡는 오행이라, "
-                                 f"그 오행의 방위·계절·환경을 가까이하면 도움이 됩니다({traits}).",
+                            text=f"용신은 {', '.join(ys)}입니다. 용신은 내 사주에서 넘치거나 부족한 기운을 맞춰 주는 "
+                                 f"'나에게 필요한 기운'이라, 그 기운이 있는 곳과 때를 가까이하면 좋습니다: {traits}.",
                             doc_ids=basis))
         months = ch["months"]
         years = list(dict.fromkeys(m["year_ganzhi"] for m in months))
@@ -568,6 +574,18 @@ class SajuPlannerApp:
         turns = ", ".join(f"{md(p['start_date'])}" for p in sp["parts"][1:])
         return (f"절기 월은 양력 1일이 아니라 절입일({turns})에 바뀌므로 이 기간은 두 절기 월에 걸칩니다: "
                 + ", ".join(pieces) + "입니다.")
+
+    def _glossary_claims(self, claims: list[Claim]) -> list[Claim]:
+        """답변에 나온 명리 용어를 일상어로 풀이한다 (src/glossary.py, 근거는 해당 규칙 문서)."""
+        st = self._state()
+        if not st.chart:
+            return []
+        terms = find_terms("\n".join(c.text for c in claims), st.chart.get("geukguk"))
+        if not terms:
+            return []
+        known = set(tools.attach_rule_docs([doc for _, _, doc in terms], "용어 풀이: " + ", ".join(n for n, _, _ in terms)))
+        return [Claim(section="용어 풀이", text=f"{name}: {plain}", doc_ids=[doc])
+                for name, plain, doc in terms if doc in known]
 
     def _plan_only(self) -> bool:
         """계획 평가만 필요한 질문인가 (여행·주거 추천을 함께 묻지 않음)."""
@@ -716,6 +734,7 @@ class SajuPlannerApp:
             claims[last_travel + 1:last_travel + 1] = travel
         # 섹션은 정해진 순서로 보여 준다 (같은 섹션 안의 순서는 유지)
         claims.sort(key=lambda c: SECTION_ORDER.get(c.section, SECTION_ORDER["안내"] - 0.5))
+        claims += self._glossary_claims(claims)
         source = self._source_claim(claims)
         if source:
             claims.append(source)
