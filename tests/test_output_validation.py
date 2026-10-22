@@ -111,6 +111,22 @@ class TestDeterministicClaims(unittest.TestCase):
         self.assertEqual(claims[0].doc_ids, ["mcp:saju", "tool:evaluate_plan", "T-OS-KYOTO"])
         self.assertEqual(self.app._claim_violations(claims[0], set(st.contexts)), [])
 
+    def test_unknown_place_is_not_rated_only_month(self):
+        st = make_state()
+        st.route = ["plan_agent"]
+        st.add_context("tool:evaluate_plan", "{}", "tool", "plan")
+        st.plan_results = [{"rating": "주의", "ganzhi": "己亥", "start_date": "2026-11-07", "end_date": "2026-12-06",
+                            "month_yongsin_match": [], "clash_with_day_branch": True, "place_id": None, "province": None,
+                            "alternatives": [{"id": "T-OS-KYOTO", "name": "일본 교토"}], "basis": "rule:travel:plan-rating",
+                            "plan": {"kind": "travel", "month": 11, "place": "남극", "year": 2026}}]
+        plan_text = self.app._plan_claims()[0].text
+        self.assertTrue(plan_text.startswith("2026년 11월 남극 여행: 남극은 추천 장소 DB에 없어 장소 자체는 평가하지 않았습니다."))
+        self.assertIn("시기 평가는 '주의'", plan_text)
+        head = self.app._unknown_place_headline()
+        self.assertTrue(head.text.startswith("남극은 추천 장소 DB에 없어 장소 자체는 평가하지 않았습니다. 11월이라는 시기만 보면 '주의'"))
+        self.assertIn("일본 교토", head.text)
+        self.assertEqual(self.app._claim_violations(head, set(st.contexts)), [])
+
     def test_plan_out_of_window_keeps_year(self):
         st = make_state()
         st.route = ["plan_agent"]

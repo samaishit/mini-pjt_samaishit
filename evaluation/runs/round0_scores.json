@@ -1,12 +1,8 @@
 {
  "summary": {
-  "total": 2,
-  "passed": 2,
+  "total": 1,
+  "passed": 1,
   "by_category": {
-   "positive": [
-    1,
-    1
-   ],
    "negative": [
     1,
     1
@@ -18,28 +14,22 @@
   "answer_model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
   "judge_model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
   "judge_version": "v2",
-  "scored_at": "2026-10-22 09:22"
+  "scored_at": "2026-10-22 12:02"
  },
  "scores": [
   {
-   "id": 1,
-   "category": "positive",
+   "id": 9,
+   "category": "negative",
    "status": "ok",
    "checks": {
     "tools": {
      "expected": [
-      "calculate_saju",
-      "get_luck_calendar",
-      "search_travel",
-      "search_regions",
-      "retrieve_docs"
+      "search_travel"
      ],
      "called": [
       "calculate_saju",
-      "element_direction_map",
       "get_luck_calendar",
       "retrieve_docs",
-      "search_regions",
       "search_travel"
      ],
      "missing": []
@@ -49,28 +39,7 @@
      "score": 5,
      "missing_traits": [],
      "forbidden_found": [],
-     "reasoning": "답변은 모든 expected_traits를 충족합니다. 정중한 존댓말 사용, 12개 절기 월을 날짜 범위와 함께 제시(戊戌월 2026-10-08 ~ 己酉월 2027-09-08까지), 월마다 국내 1곳과 해외 1곳 추천, 주거지 Top 3(부산 해운대구, 대구 수성구, 광주 동구)와 이사하기 좋은 달·피할 달 명시, 용신 오행(丙火, 癸水, 甲木)을 근거로 한 설명, 참고용 면책 문구 포함. forbidden 항목도 없습니다: 모든 장소는 실존하는 곳이며, 생년월일은 <BIRTH>로 가려져 있고, 시세 전망 내용은 없습니다."
-    }
-   },
-   "passed": true,
-   "detail": "judge=5"
-  },
-  {
-   "id": 11,
-   "category": "negative",
-   "status": "ok",
-   "checks": {
-    "tools": {
-     "expected": [],
-     "called": [],
-     "missing": []
-    },
-    "judge": {
-     "version": "v2",
-     "score": 5,
-     "missing_traits": [],
-     "forbidden_found": [],
-     "reasoning": "답변은 expected_traits의 모든 항목을 충족합니다: 1) 성별 정보가 필요하다는 안내(정확한 계산을 위해), 2) 성별 입력 요청(남/여를 함께 알려 주세요), 3) 계산 결과를 제시하지 않음(성별만 요청). forbidden 항목인 간지, 용신, 여행지 추천이 전혀 나타나지 않았습니다."
+     "reasoning": "답변은 expected_traits를 모두 충족합니다. 1) \"남극은 추천 장소 DB에 없어 장소 자체는 평가하지 않았습니다\"라고 명확히 안내했고, 2) DB에 없어서 평가하지 않는다는 원칙을 지켜 근거 없는 평가를 하지 않았으며, 3) 안동 하회마을, 보성 등 DB 내 대안 여행지를 구체적으로 제시했습니다. Forbidden 항목(남극 일정·가격·명소를 지어내거나 DB에 없는 장소를 추천)도 전혀 나타나지 않았습니다."
     }
    },
    "passed": true,

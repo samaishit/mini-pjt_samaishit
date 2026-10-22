@@ -524,10 +524,14 @@ class SajuPlannerApp:
                     ids.append(r["place_id"])
             elif r.get("province"):
                 why.append(f"{r['province']}{josa(r['province'], '은', '는')} 장소 DB의 한 장소가 아니어서 달의 기운으로 평가했습니다.")
-            elif plan.get("place"):
-                why.append(f"{plan['place']}{josa(plan['place'], '은', '는')} 장소 DB에 없어 달의 기운만으로 평가했습니다.")
-            text = (f"{label}{josa(what, '은', '는')} {span}에 해당하며 평가는 '{r['rating']}'입니다. "
-                    + " ".join(why))
+            if plan.get("place") and not r.get("place_id") and not r.get("province"):
+                # DB 에 없는 장소는 평가하지 않는다: 장소 평가를 하지 않았다는 말을 먼저, 등급은 '시기'에 대해서만
+                place_name = plan["place"]
+                text = (f"{label}: {place_name}{josa(place_name, '은', '는')} 추천 장소 DB에 없어 장소 자체는 평가하지 "
+                        f"않았습니다. 시기만 보면 {span}이며 시기 평가는 '{r['rating']}'입니다. " + " ".join(why))
+            else:
+                text = (f"{label}{josa(what, '은', '는')} {span}에 해당하며 평가는 '{r['rating']}'입니다. "
+                        + " ".join(why))
             alts = [a for a in r.get("alternatives") or [] if a["id"] in st.contexts][:2]
             if alts:   # 장소 DB 안의 대안만, 고른 이유와 함께
                 items = [self._place_facts(a["id"], plan["month"]) for a in alts]
@@ -557,6 +561,13 @@ class SajuPlannerApp:
                             "너는 계획을 다시 평가하거나 여행지·주거지를 추천하지 말고, '사주 해석' 섹션에 그 달 월운(십성)이 "
                             "그 활동과 어떻게 어울리는지를, 필요하면 '안내' 섹션에 주의점을 쓴다. "
                             "장소가 DB 에 있는지는 계획 평가 문장이 이미 밝히므로 다시 쓰지 않는다.")
+            unknown = [r["plan"]["place"] for r in st.plan_results
+                       if r["plan"].get("place") and not r.get("place_id") and not r.get("province")]
+            if unknown:
+                travel_note += (f"\n23. 계획 장소 {', '.join(unknown)}은(는) 추천 장소 DB에 없다. 한눈에 보기를 포함한 어떤 문장에서도 "
+                                "이 장소가 좋다·주의하라고 평가하지 말고, 'DB에 없어 장소는 평가하지 않는다'를 먼저 밝힌 뒤 "
+                                "시기(그 달의 기운)와 DB 안의 대안만 말한다. '조회 범위 밖'은 날짜에만 쓰는 말이므로 장소에 쓰지 않는다. "
+                                "다른 달을 권할 때는 양력 월 숫자를 지어내지 말고 사주 요약에 적힌 간지월과 기간을 쓴다.")
         prompt = COMPOSE_PROMPT.format(feedback=feedback, question=s["masked"], contexts=ctx or "(없음)",
                                        reports=s.get("reports", ""), travel_note=travel_note)
         answer = await self.composer.ainvoke(prompt, {"callbacks": [TraceCallback(st)]})
@@ -574,6 +585,24 @@ class SajuPlannerApp:
         turns = ", ".join(f"{md(p['start_date'])}" for p in sp["parts"][1:])
         return (f"절기 월은 양력 1일이 아니라 절입일({turns})에 바뀌므로 이 기간은 두 절기 월에 걸칩니다: "
                 + ", ".join(pieces) + "입니다.")
+
+    def _unknown_place_headline(self) -> Claim | None:
+        """계획 장소가 DB 에 없을 때의 한눈에 보기 결론 (장소는 평가하지 않고 시기와 DB 안 대안만)."""
+        st = self._state()
+        for r in st.plan_results:
+            plan = r["plan"]
+            if not plan.get("place") or r.get("place_id") or r.get("province") or r.get("rating") is None:
+                continue
+            place = plan["place"]
+            text = (f"{place}{josa(place, '은', '는')} 추천 장소 DB에 없어 장소 자체는 평가하지 않았습니다. "
+                    f"{plan['month']}월이라는 시기만 보면 '{r['rating']}'입니다.")
+            alts = [a["name"] for a in r.get("alternatives") or [] if a["id"] in st.contexts][:2]
+            if alts:
+                text += f" 같은 시기에는 {', '.join(alts)}처럼 DB 안의 여행지가 잘 맞습니다."
+            ids = [d for d in ("mcp:saju", "tool:evaluate_plan") if d in st.contexts]
+            ids += [a["id"] for a in r.get("alternatives") or [] if a["id"] in st.contexts][:2]
+            return Claim(section="한눈에 보기", text=text, doc_ids=ids)
+        return None
 
     def _glossary_claims(self, claims: list[Claim]) -> list[Claim]:
         """답변에 나온 명리 용어를 일상어로 풀이한다 (src/glossary.py, 근거는 해당 규칙 문서)."""
@@ -707,6 +736,12 @@ class SajuPlannerApp:
                 (c.section == "이사 시기" and (MONTH_RANGE_RE.search(c.text) or SOLAR_MONTH_RE.search(c.text))))]
             claims += residence
         plan = self._plan_claims() if self._plan_only() else []
+        headline = self._unknown_place_headline()
+        if headline:
+            # DB 에 없는 장소를 평가하는 듯한 작성자 결론은 빼고, '장소는 평가하지 않음'을 먼저 밝히는 결론으로 바꾼다
+            names = [r["plan"]["place"] for r in self._state().plan_results if r["plan"].get("place")]
+            claims = [c for c in claims if not (c.section == "한눈에 보기" and any(n in c.text for n in names))]
+            claims.insert(0, headline)
         if plan:
             claims = [c for c in claims if c.section not in PLAN_REPLACED_SECTIONS]
             pos = max((i for i, c in enumerate(claims) if c.section == "사주 요약"), default=-1) + 1
