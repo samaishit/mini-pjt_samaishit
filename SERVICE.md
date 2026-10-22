@@ -82,7 +82,8 @@
 | 답변 조립 | 출력 검증·코드 문장 | 근거 doc_id·금칙어·용신 오기 검사 후 1회 재생성. 월별 여행 표, 주거, 계획 평가, 사주 요약, 용어 풀이는 도구 결과로 코드가 문장을 만들고, 보여 주기 직전에 간지를 한글(한자)로 바꾼다 | Python (LLM 미사용) |
 | 서비스 | `POST /query` | 질문 → 답변, 근거(contexts), 실행 기록(trace). 상태 없음 | FastAPI |
 | 서비스 | `POST /chat`, `DELETE /chat/{id}` | 웹 화면 대화 탭. 세션마다 사주 요약·가린 질문·보여 준 장소를 1시간 기억해 이어 묻기를 처리 | FastAPI (서버 메모리) |
-| 화면 | React 테스트 화면 | 단일 질의·대화 탭, 출생 정보 입력 폼, 평가셋 예시 질문(`GET /examples`), 처리 과정(trace)·근거 탭 | React + Vite, FastAPI가 `/`에서 서빙 |
+| 서비스 | `POST /query/stream`, `POST /chat/stream` | 화면용 스트리밍(Server-Sent Events). 처리 단계와 trace 를 실시간으로 보내고, 답변은 근거 검증 뒤 한 번에 보낸다. 기존 API 는 그대로 | FastAPI `StreamingResponse` |
+| 화면 | React 테스트 화면 | 단일 질의·대화 탭, 출생 정보 입력 폼, 평가셋 예시 질문(`GET /examples`), 처리 과정(trace)·근거 탭, 단계별 진행 로딩 화면 | React + Vite, FastAPI가 `/`에서 서빙 |
 
 **데이터 소스**
 | 데이터 | 형태 | 실제/가짜 |

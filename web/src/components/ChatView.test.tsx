@@ -23,14 +23,8 @@ describe("ChatView", () => {
       calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
       if (init?.method === "DELETE") return new Response(JSON.stringify({ deleted: true }));
       // 스트리밍 API: 단계 알림 → 결과 (SSE)
-      const sse = `event: stage
-data: ${JSON.stringify({ stage: "input", label: "확인 중" })}
-
-` +
-        `event: result
-data: ${JSON.stringify(reply(calls.length > 1, calls.length))}
-
-`;
+      const sse = `event: stage\ndata: ${JSON.stringify({ stage: "input", label: "확인 중" })}\n\n` +
+        `event: result\ndata: ${JSON.stringify(reply(calls.length > 1, calls.length))}\n\n`;
       return new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } });
     }));
     render(<ChatView />);

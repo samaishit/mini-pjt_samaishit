@@ -321,7 +321,9 @@ class SajuPlannerApp:
         st.add_step("parse:birth", parsed.masked_text,
                     f"birth={'ok' if parsed.birth else 'none'}, clarification={parsed.clarification}",
                     type="parse", name="birth_parser")
-        decision = guards.input_guard(parsed.masked_text, parsed.birth is not None, use_llm=self.use_llm_guard)
+        # 입력 가드 LLM 은 동기 호출이라 별도 스레드에서 돌린다 (이벤트 루프를 막으면 스트리밍 알림이 늦어진다)
+        decision = await asyncio.to_thread(guards.input_guard, parsed.masked_text, parsed.birth is not None,
+                                           use_llm=self.use_llm_guard)
         st.add_step("guard:input", parsed.masked_text, f"{decision.action}: {decision.category or decision.partial_categories}",
                     type="guard", name="input_guard")
         if decision.action == "block":

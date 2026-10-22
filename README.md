@@ -51,7 +51,7 @@ python -m src.retriever --build
 # 3) 웹 테스트 화면 빌드 (최초 1회, React + Vite)
 cd web && npm install && npm run build && cd ..
 
-# 4) API + 웹 화면 실행 → 브라우저에서 http://localhost:8000/
+# 4) API + 웹 화면 실행 → 브라우저에서 http://127.0.0.1:8000/ (Windows 에서 localhost 는 IPv6 를 먼저 시도해 첫 응답이 2초 늦을 수 있다)
 uvicorn src.api:api --port 8000
 #   PowerShell: Invoke-RestMethod -Uri http://localhost:8000/query -Method Post -ContentType "application/json; charset=utf-8" -Body '{"question": "1988년 11월 3일 오전 7시 양력생 남성입니다. 내년 5월에 여행 어디로 가면 좋을까?"}'
 #   또는 한 번만: python -m src.agent "질문"
@@ -73,6 +73,8 @@ uv venv --python 3.12 .venv-eval && uv pip install --python .venv-eval/Scripts/p
 React 테스트 화면이다. 빌드 결과(`web/dist`)를 FastAPI 가 `/` 에서 함께 서빙한다. 탭이 두 개다.
 - **단일 질의 탭** (`POST /query`): 과정 규약 그대로 상태 없는 한 번의 질의.
 - **대화 탭** (`POST /chat`, 단기 기억): 첫 메시지에서 계산한 사주 요약과 앞 질문을 세션(1시간) 동안 기억해, 두 번째 질문부터는 출생 정보 없이 이어 묻는다 (예: "내년 5월 국내 여행지?" → "그럼 해외는?" → "다른 곳도 알려줘"). 이어 묻는 말의 달·계절·국내/해외를 우선하고, '다른 곳' 요청이면 이미 보여 준 장소를 뺀다. 서버는 원본 생년월일을 저장하지 않고 `<BIRTH>` 로 가린 질문과 계산된 사주 요약만 기억하며, '새 대화'(`DELETE /chat/{session_id}`)로 바로 지운다. 두 번째 턴부터는 **답변 필터**가 이미 보여 준 문장(사주 요약·용어 풀이 등)을 접고 이번 질문 범위의 섹션만 펼친다. 접은 내용은 답변 아래 '접은 내용 펼치기'로 볼 수 있고, '다시·전체·정리'라고 하면 전체를 보여 준다(예: "그럼 해외는?" 답변 1,636자 → 326자). 흐름도는 [docs/architecture.md](docs/architecture.md) 6장.
+
+**스트리밍 로딩**: 두 탭 모두 화면용 스트리밍 API(`POST /query/stream`, `POST /chat/stream`, Server-Sent Events)를 쓴다. 기존 `/query`·`/chat` 은 그대로다. 서버는 처리 단계(질문 확인 → 사주 계산 → 전문가 선택 → 전문가 분석 → 답변 정리 → 근거 검증 → 마무리)와 trace 를 생기는 대로 보내고, 답변 본문은 근거 검증이 끝난 뒤 한 번에 보낸다(검증 전 문장을 내보내지 않음). 화면은 지금 하는 일, 진행률 막대, 단계 체크리스트, 최근 활동, 답변 자리 스켈레톤, 기다리는 동안 볼 명리 상식, 예상 소요 시간을 보여 주고 언제든 취소할 수 있다. 스트리밍을 지원하지 않는 서버면 기존 API 로 다시 요청한다.
 
 단일 질의 탭의 기능:
 - **폼 입력**: 생년월일·양/음력·윤달·출생 시각(모름)·성별과 질문을 받아 서버 파서가 읽는 문장으로 조립해 보낸다 (예: `양력 1988년 11월 3일 오전 7시 출생 남성입니다. 내년 5월에 여행 어디로 가면 좋을까?`). 조립 형식은 `web/src/composer.cases.json` 으로 vitest 와 `tests/test_web_composer.py`(서버 파서)가 함께 검증한다.

@@ -216,7 +216,38 @@ flowchart TD
 - 접은 문장도 응답 `view`에 남아 화면에서 펼쳐 볼 수 있다. 직전 답변 요약을 작성 LLM 에 넘겨 같은 해석을 되풀이하지 않게 한다.
 - 예(실측): 두 번째 턴 "그럼 해외는?"의 답변이 1,636자 → 326자(앞에서 본 내용 12건 접음).
 
-## 7. 요청 상태와 trace
+## 7. 스트리밍 API (`POST /query/stream`, `POST /chat/stream`)
+
+웹 화면은 기다리는 동안 진행 상황을 보여 주려고 스트리밍 API 를 쓴다. 기존 `/query`·`/chat` 은 그대로다.
+요청 상태(`RequestState`)에 진행 리스너를 달면, 노드가 시작할 때의 단계 알림(`emit`)과 trace 한 줄(`add_step`)이 그대로 흘러간다.
+리스너가 없는 기존 API 에서는 아무것도 보내지 않으므로 응답(trace 포함)이 바뀌지 않는다.
+
+```mermaid
+sequenceDiagram
+    participant W as 웹 화면
+    participant A as FastAPI (stream_run)
+    participant G as 메인 그래프 (run_turn)
+    W->>A: POST /query/stream {question}
+    A-->>W: stage: start (요청을 받았어요)
+    A->>G: 별도 작업으로 실행 (listener 연결)
+    loop 노드가 진행될 때마다
+        G-->>A: stage (input · saju · route · compose · validate · finalize)
+        A-->>W: event: stage
+        G-->>A: trace 한 줄 (마스킹 후)
+        A-->>W: event: step
+    end
+    Note over A,W: 10초 동안 알림이 없으면 keepalive 주석으로 연결 유지
+    G-->>A: 최종 응답 (근거 검증 끝난 답변)
+    A-->>W: stage: done, event: result
+    W->>W: 진행 화면을 답변 화면으로 교체
+```
+
+- 답변 본문은 근거 검증이 끝난 뒤 `result` 로 한 번에 보낸다. LLM 출력을 글자 단위로 흘리면 검증 전 문장(나중에 지워질 문장, 근거 누락)이 먼저 보이기 때문이다.
+- 화면을 닫거나 취소하면 서버의 계산 작업도 멈춘다. 오류면 `error` 이벤트(고정 문구 + 오류 종류)를 보내고 입력은 싣지 않는다.
+- 입력 가드 LLM 은 동기 호출이라 별도 스레드에서 돌려, 그동안에도 진행 알림이 막히지 않게 했다.
+- 화면의 로딩: 지금 하는 일, 진행률(단계 알림 기준, 알림이 없는 동안에도 다음 단계 직전까지 천천히 차오름), 단계 체크리스트, 최근 활동, 스켈레톤, 기다리는 동안 볼 명리 상식, 예상 소요 시간, 취소.
+
+## 8. 요청 상태와 trace
 
 - 요청마다 `tracing.start_request()`가 `RequestState`(trace, contexts, chart, travel_picks, residence, plan_results, route, date_spans)를 새로 만든다. 상태는 요청 사이에 공유하지 않는다(멀티턴 없음).
 - trace 의 input/output 은 마스킹한 뒤 300자로 자른다. 사주 MCP 호출은 출력만 남긴다.

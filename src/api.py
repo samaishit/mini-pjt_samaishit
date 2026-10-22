@@ -154,14 +154,20 @@ def stream_run(run) -> StreamingResponse:
         loop.call_soon_threadsafe(queue.put_nowait, (kind, data))
 
     async def events():
+        yield sse("stage", {"stage": "start", "label": "요청을 받았어요"})   # 계산을 띄우기 전에 바로 알린다
         task = asyncio.create_task(run(listener))
-        yield sse("stage", {"stage": "start", "label": "요청을 받았어요"})
         try:
             while not (task.done() and queue.empty()):
-                try:
-                    kind, data = await asyncio.wait_for(queue.get(), timeout=STREAM_KEEPALIVE_S)
+                # 알림이 오거나 계산이 끝나는 쪽을 먼저 기다린다 (끝났는데 keepalive 시간만큼 기다리지 않게)
+                getter = asyncio.ensure_future(queue.get())
+                done, _ = await asyncio.wait({getter, task}, timeout=STREAM_KEEPALIVE_S,
+                                             return_when=asyncio.FIRST_COMPLETED)
+                if getter in done:
+                    kind, data = getter.result()
                     yield sse(kind, data)
-                except asyncio.TimeoutError:
+                    continue
+                getter.cancel()
+                if not done:
                     yield ": keepalive\n\n"   # 오래 걸리는 단계에서도 연결을 유지한다
             try:
                 result = task.result()
