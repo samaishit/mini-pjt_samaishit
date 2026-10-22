@@ -72,16 +72,19 @@ uv venv --python 3.12 .venv-eval && uv pip install --python .venv-eval/Scripts/p
 - Bedrock 일일 토큰 한도에 걸리면 `SAJU_LLM_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0`로 모델을 바꿔 실행할 수 있다 (기본 Claude Sonnet 4.5).
 
 ## RAGAS 평가 결과
-(round 2 결과 반영 예정 — round 1 값은 [evaluation/round1_report.md](evaluation/round1_report.md))
-- context_recall: -
-- context_precision: -
-- faithfulness: -
-- answer_relevancy: -
+2차 최종 실행 기준, guardrail 을 뺀 16건 중 contexts 가 있는 14건 평균(되묻기 응답 10·11 제외). 평가 LLM Sonnet 4.5, 임베딩 Titan v2. 괄호는 1차 값.
+- context_recall: **0.869** (0.822)
+- context_precision: **0.728** (0.835)
+- faithfulness: **0.619** (0.519)
+- answer_relevancy: **0.241** (0.214)
+
+해석과 행별 값은 [evaluation/round2_report.md](evaluation/round2_report.md). faithfulness 는 월별 여행·주거·계획 문장을 도구 결과로 코드가 만들면서 올랐고, context_precision 은 여행·계획·주거 경로에도 규칙 문서를 미리 넣으면서 내려갔다. answer_relevancy 는 여러 섹션으로 된 긴 답변 구조 때문에 낮다.
 
 ## 인-아웃 세트 통과율 (자체 평가)
-- 1차 (Day 9): - / 24 통과
-- 2차 (Day 10 개선 후): - / 24 통과
-- 개선폭: -
+답변 Claude Haiku 4.5(Sonnet 일일 한도로 `SAJU_LLM_MODEL` 사용), 심사 Claude Sonnet 4.5(temperature 0) — 두 차수 같은 조건.
+- 1차 (Day 8): 19 / 24 통과 (guardrail 8/8, 실패 1·5·6·8·13)
+- 2차 (Day 9 개선 후): **24 / 24 통과** (guardrail 8/8) — 최종 코드로 돌린 마지막 실행. 중간 실행 이력(22/24 두 번, 24/24 한 번)은 2차 리포트에 그대로 남겼다.
+- 개선폭: +5건 (79% → 100%), 최대 응답 시간 121s → 80s
 
 ## 트라이앤에러 회고
 - **사주 MCP 선정**: OpenFate bazi-mcp는 세운·월운 도구가 없고, molpass/mcp-saju는 기준일을 받지 않아 2027년 월운을 못 구했다 → 포크해 `now`와 절기 경계를 스캔하는 `get_luck_calendar`를 추가. 정오 판정으로는 입동(11-07 오후)이 하루 밀려 23:59 KST 판정으로 바꿨다.
@@ -90,19 +93,25 @@ uv venv --python 3.12 .venv-eval && uv pip install --python .venv-eval/Scripts/p
 - **부동산 데이터**: 네이버 부동산은 robots.txt 수집 금지·약관·가드레일(시세 금지) 충돌 → 공개 자료 기반으로 시·구 생활 환경만 직접 작성.
 - **LLM의 월 매핑 오류**: "내년 5월"을 甲辰월로 잘못 말함 → 사주 요약에 '양력 N월(15일 기준)' 열을 넣고, 출력 단계에서 `간지월(기간)` 표기를 코드로 교정.
 - **Supervisor 누락**: 연간 요청에서 Supervisor가 여행 에이전트를 건너뜀 → 키워드 의도 라우터로 필수 에이전트를 지정하고 누락 시 직접 호출.
-- (round 1 → round 2 개선 내역 추가 예정)
+- **심사 모델 분리**: 1차를 Haiku 로 답하고 Haiku 로 심사했다 → 답변 모델과 분리된 `JUDGE_MODEL`(Sonnet 4.5)로 같은 답변을 다시 심사(19/24 유지, 실패 행은 바뀜). RAGAS 평가 LLM 도 같은 모델로 맞췄다.
+- **평가 LLM 스로틀링**: Sonnet 일일 한도에 걸린 RAGAS 실행이 대부분 빈 값(faithfulness 1/14 유효)인데도 평균처럼 보고됐다 → 지표마다 유효 행 수를 함께 적고, 75% 미만이면 '측정 불가'로 처리. 동시 호출을 4개로 줄였다.
+- **검색 가중치**: 감으로 정한 0.5/0.5 대신 규칙 문서 질문 30개로 가중치를 비교(`evaluation/retrieval_sweep.py`) → 0.2/0.8 채택(MRR@3 0.428→0.494). 벡터 단독이 MRR 은 더 높았지만 과정 요구인 하이브리드를 유지.
+- **LLM 이 다시 쓰면 틀린다**: 계획 평가 도구는 '12월=庚子월, 보통'을 정확히 냈는데 작성 LLM 이 요약하며 매핑을 빠뜨렸고, 절기 월 번호 [8, 9, 10]을 '8월~10월'로, 11월 5~10일을 엉뚱한 절기 월로 옮겼다 → 도구 결과에서 바로 나오는 문장(월별 여행 표, 주거 Top 3·이사 시기, 계획 평가, 날짜 구간 분할)은 코드가 만들고 LLM 은 요약만 쓰게 바꿨다. 코드 문장도 같은 근거 검사를 거친다.
+- **Supervisor 반복 넘기기**: 1년 계획 질문에서 Supervisor 가 넘기기 3개를 동시에 호출 → 하나만 실행되고 같은 넘기기를 8번 넘게 반복해 107~180초(한 번 타임아웃). Bedrock 은 병렬 도구 호출 끄기를 지원하지 않아 `post_model_hook`으로 '아직 보고하지 않은 에이전트 하나'만 남기고, 누락 보완은 동시 실행 → 70~80초.
+- **경계 행의 흔들림**: 한 번 심사 방식이라 같은 코드에서도 실행마다 4·7·14행이 번갈아 실패했다 → 실패 원인을 행마다 고친 뒤 최종 코드로 다시 돌린 결과만 보고하고, 중간 실행은 접미사(`_draft`, `_rerunN`)로 남겼다.
 
 ## 핵심 코드 위치
-- `src/agent.py:163` — 메인 에이전트 그래프 (`SajuPlannerApp`, 그래프 구성 `:184`, 입력 가드 `:207`, Supervisor `:232`, 출력 검증 `:296`)
-- `src/agent.py:40` — 질문 의도 라우터 (`required_agents`)
-- `src/tools.py` — 도메인 도구 (MCP 허브 `:46`, 사주 계산 `:121`, 여행 추천 `:303`, 주거 추천 `:347`, 계획 평가 `:383`)
-- `src/retriever.py` — RAG 파이프라인 (인덱스 생성 `:108`, 쿼리 확장 `:148`, 하이브리드 검색 `:159`)
+- `src/agent.py:228` — 메인 에이전트 그래프 (`SajuPlannerApp`, 그래프 구성 `:252`, 입력 가드 `:275`, Supervisor `:300`, 출력 검증 `:531`, 최종 조립 `:591`)
+- `src/agent.py:78` — 질문 의도 라우터 (`required_agents`), `:60` Supervisor 단일 넘기기 훅 (`one_handoff_at_a_time`)
+- `src/agent.py:352` — 도구 결과로 만드는 문장 (월별 여행 `_travel_claims`, 주거 `:389`, 계획 평가 `:419`)
+- `src/tools.py` — 도메인 도구 (MCP 허브 `:48`, 사주 계산 `:123`, 규칙 문서 선검색 `:217`, 날짜 구간 분할 `:238`, 여행 추천 `:399`, 주거 추천 `:446`, 계획 평가 `:484`)
+- `src/retriever.py` — RAG 파이프라인 (인덱스 생성 `:108`, 하이브리드 검색 `:127`, 쿼리 확장 `:148`, 검색 진입점 `:159`)
 - `src/birth_parser.py:212` — 결정론 출생 정보 파서
 - `src/guards.py` — 가드레일 (고정 문구 `:19`, 제3자 `:66`, 입력 가드 `:140`, 출력 검사 `:165`)
-- `src/tracing.py` — 요청별 trace·contexts (`RequestState :42`, `TraceCallback :95`)
+- `src/tracing.py` — 요청별 trace·contexts (`RequestState :54`, `TraceCallback :113`)
 - `src/api.py` — `POST /query`
 - `mcp_servers/saju/src/index.ts` — 사주 MCP 포크, `mcp_servers/places/places_server.py` — 장소 DB MCP
-- `evaluation/run_eval.py`, `evaluation/judge.py`, `evaluation/ragas_eval.py` — 평가
+- `evaluation/run_eval.py`, `evaluation/judge.py`, `evaluation/ragas_eval.py` — 평가, `evaluation/retrieval_sweep.py` — 검색 가중치 비교
 
 ## 데이터 출처와 라이선스
 - 사주 계산: [molpass/mcp-saju](https://github.com/molpass/mcp-saju) 포크 + ssaju 엔진 (MIT, [LICENSE](mcp_servers/saju/LICENSE))

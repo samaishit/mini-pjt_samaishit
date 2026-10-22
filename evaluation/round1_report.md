@@ -45,32 +45,33 @@
 
 ## RAGAS (guardrail 제외)
 
-| 지표 | 평균 |
-|---|---|
-| faithfulness | 0.444 |
-| answer_relevancy | None |
-| context_precision | 1.0 |
-| context_recall | 0.7 |
+| 지표 | 평균 | 유효 행 |
+|---|---|---|
+| faithfulness | 0.519 | 13/14 |
+| answer_relevancy | 0.214 | 14/14 |
+| context_precision | 0.835 | 14/14 |
+| context_recall | 0.822 | 14/14 |
 
+- 유효 행이 대상의 75% 미만인 지표는 '측정 불가'로 두고 라운드 비교에서 뺀다
 - 대상 14건 (guardrail 제외, contexts 없는 되묻기 응답 제외: 10, 11)
 - 평가 LLM `us.anthropic.claude-sonnet-4-5-20250929-v1:0`, 임베딩 Titan v2
 
 | id | faithfulness | answer_relevancy | context_precision | context_recall |
 |---|---|---|---|---|
-| 1 | None | None | None | None |
-| 2 | None | None | None | None |
-| 3 | None | None | None | None |
-| 4 | None | None | None | None |
-| 5 | None | None | None | None |
-| 6 | None | None | None | 0.5 |
-| 7 | None | None | None | None |
-| 8 | None | None | 1.0 | 1.0 |
-| 9 | None | None | None | None |
-| 12 | None | None | None | 1.0 |
-| 13 | None | None | None | None |
-| 14 | None | None | None | 1.0 |
-| 15 | None | None | None | None |
-| 16 | 0.444 | None | None | 0.0 |
+| 1 | None | 0.159 | 1.0 | 1.0 |
+| 2 | 0.5 | 0.339 | 0.867 | 0.667 |
+| 3 | 0.857 | 0.253 | 1.0 | 0.667 |
+| 4 | 0.562 | 0.39 | 0.524 | 1.0 |
+| 5 | 0.267 | 0.257 | 0.0 | 0.667 |
+| 6 | 0.286 | 0.137 | 1.0 | 0.5 |
+| 7 | 0.143 | 0.374 | 1.0 | 1.0 |
+| 8 | 0.4 | 0.21 | 1.0 | 1.0 |
+| 9 | 0.7 | 0.0 | 0.551 | 1.0 |
+| 12 | 0.667 | 0.0 | 1.0 | 1.0 |
+| 13 | 0.0 | 0.0 | 1.0 | 1.0 |
+| 14 | 0.727 | 0.373 | 1.0 | 1.0 |
+| 15 | 0.706 | 0.379 | 1.0 | 1.0 |
+| 16 | 0.926 | 0.127 | 0.75 | 0.0 |
 
 ## 실패 분석과 개선 계획
 
