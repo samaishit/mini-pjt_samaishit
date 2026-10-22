@@ -32,6 +32,7 @@ MODEL = os.getenv("JUDGE_MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
 # Bedrock 스로틀링으로 작업이 시간 초과되지 않도록 동시 실행을 줄이고 제한 시간을 늘린다
 RUN_CONFIG = RunConfig(timeout=600, max_workers=4, max_retries=10, max_wait=90)
 METRICS = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+MIN_VALID_SHARE = 0.75   # 유효 행이 대상의 75% 미만이면 '측정 불가'로 보고한다 (평균·라운드 비교 없음)
 
 
 def masked_question(res: dict, fallback: str) -> str:
@@ -83,8 +84,8 @@ def main():
     means, valid = {}, {}
     for m in METRICS:
         vals = [v[m] for v in per_row.values() if v[m] is not None]
-        means[m] = round(sum(vals) / len(vals), 3) if vals else None
         valid[m] = len(vals)   # 오류(스로틀링 등)로 값이 비면 평균에서 빠지므로 유효 건수를 함께 남긴다
+        means[m] = round(sum(vals) / len(vals), 3) if vals and len(vals) >= MIN_VALID_SHARE * len(ids) else None
     if wanted:
         print(json.dumps({"n": len(ids), "means": means, "valid": valid, "per_row": per_row}, ensure_ascii=False))
         return
@@ -96,8 +97,9 @@ def main():
     report = EVAL_DIR / f"round{args.round}_report.md"
     if report.exists():
         table = ["| 지표 | 평균 | 유효 행 |", "|---|---|---|"]
-        table += [f"| {m} | {means[m]} | {valid[m]}/{len(ids)} |" for m in METRICS]
-        table += ["", f"- 대상 {len(ids)}건 (guardrail 제외, contexts 없는 되묻기 응답 제외: {', '.join(skipped) or '없음'})",
+        table += [f"| {m} | {means[m] if means[m] is not None else '측정 불가'} | {valid[m]}/{len(ids)} |" for m in METRICS]
+        table += ["", f"- 유효 행이 대상의 {MIN_VALID_SHARE:.0%} 미만인 지표는 '측정 불가'로 두고 라운드 비교에서 뺀다",
+                  f"- 대상 {len(ids)}건 (guardrail 제외, contexts 없는 되묻기 응답 제외: {', '.join(skipped) or '없음'})",
                   f"- 평가 LLM `{MODEL}`, 임베딩 Titan v2", "",
                   "| id | " + " | ".join(METRICS) + " |", "|---" * (len(METRICS) + 1) + "|"]
         table += [f"| {cid} | " + " | ".join(str(v[m]) for m in METRICS) + " |" for cid, v in per_row.items()]

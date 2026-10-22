@@ -123,7 +123,10 @@ class TestDeterministicClaims(unittest.TestCase):
                                                      "elements": ["木", "土"], "score_breakdown": {"direction": 1}}}}}
         claims = self.app._travel_claims()
         self.assertIn("용신이 火·水·木", claims[0].text)
-        self.assertIn("일본 교토(동쪽, 용신 木 기운·용신 방위)", claims[1].text)
+        self.assertIn("일본 교토(동쪽, 용신 木 기운·용신 방위, 대나무숲·사찰 정원)를 추천합니다", claims[1].text)
+        # 코드가 만든 문장도 LLM 문장과 같은 근거 검사를 통과해야 한다
+        for c in claims:
+            self.assertEqual(self.app._claim_violations(c, set(st.contexts)), [], c.text)
 
     def test_josa_and_birth_guess(self):
         from src.agent import BIRTH_GUESS_RE, josa
@@ -131,6 +134,31 @@ class TestDeterministicClaims(unittest.TestCase):
         self.assertTrue(self.v_guess("양력 12월 생 남성이시며"))
         self.assertFalse(self.v_guess("2027년 생활 리듬을 정돈하세요."))
         self.assertTrue(BIRTH_GUESS_RE.search("1988년생"))
+
+    def test_date_span_split_at_jeolip_day(self):
+        from src import tools
+        st = make_state()
+        st.chart = {**CHART, "months": [
+            {"index": 1, "month_ganzhi": "戊戌", "start_date": "2026-10-08", "end_date": "2026-11-06"},
+            {"index": 2, "month_ganzhi": "己亥", "start_date": "2026-11-07", "end_date": "2026-12-06"}]}
+        spans = tools.split_date_spans("<BIRTH> 남성. 11월 5일부터 10일까지 여행 가면 어느 달 운으로 봐야 해?")
+        self.assertEqual([(p["month_ganzhi"], p["from"], p["to"]) for p in spans[0]["parts"]],
+                         [("戊戌", "2026-11-05", "2026-11-06"), ("己亥", "2026-11-07", "2026-11-10")])
+        text = self.app._span_text(spans[0])
+        self.assertIn("절입일(11월 7일)", text)
+        self.assertIn("11월 5일~11월 6일은 戊戌월(2026-10-08 ~ 2026-11-06)", text)
+
+    def test_range_with_trailing_words_is_repaired(self):
+        make_state()
+        ans = StructuredAnswer(claims=[Claim(section="월별 운세", text="己亥월(2026-11-08 ~ 2026-12-07의 후반부)입니다.",
+                                             doc_ids=["mcp:saju"])])
+        self.assertEqual(self.app._repair_month_ranges(ans), 1)
+        self.assertEqual(ans.claims[0].text, "己亥월(2026-11-07 ~ 2026-12-06)입니다.")
+
+    def test_solar_month_summary_dropped_when_table_exists(self):
+        from src.agent import SOLAR_MONTH_RE
+        self.assertTrue(SOLAR_MONTH_RE.search("8월부터 10월까지 세 달이 좋습니다"))
+        self.assertFalse(SOLAR_MONTH_RE.search("乙巳월(2027-05-06 ~ 2027-06-05)"))
 
     def v_guess(self, text):
         st = make_state()

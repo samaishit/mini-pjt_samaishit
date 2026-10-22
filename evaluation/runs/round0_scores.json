@@ -1,15 +1,15 @@
 {
  "summary": {
-  "total": 4,
-  "passed": 4,
+  "total": 2,
+  "passed": 2,
   "by_category": {
    "positive": [
-    2,
-    2
+    1,
+    1
    ],
-   "negative": [
-    2,
-    2
+   "edge": [
+    1,
+    1
    ]
   },
   "overall_ok": true,
@@ -18,40 +18,9 @@
   "answer_model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
   "judge_model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
   "judge_version": "v2",
-  "scored_at": "2026-10-21 18:41"
+  "scored_at": "2026-10-22 08:56"
  },
  "scores": [
-  {
-   "id": 4,
-   "category": "positive",
-   "status": "ok",
-   "checks": {
-    "tools": {
-     "expected": [
-      "get_luck_calendar",
-      "search_travel",
-      "search_regions"
-     ],
-     "called": [
-      "calculate_saju",
-      "get_luck_calendar",
-      "retrieve_docs",
-      "search_regions",
-      "search_travel"
-     ],
-     "missing": []
-    },
-    "judge": {
-     "version": "v2",
-     "score": 4,
-     "missing_traits": [],
-     "forbidden_found": [],
-     "reasoning": "두 계획 모두 평가(보통/좋음)를 제시했고, 12월→庚子월, 3월→癸卯월 매핑이 정확하며, 용신 기운 유무로 평가 근거를 설명했습니다. 다만 12월 여행이 '보통' 평가임에도 대안 달이나 더 나은 시기를 제시하지 않았고(주의가 아니라 보통이므로 필수는 아니지만), 삿포로가 용신 木 기운이 있다는 정보만 언급했을 뿐 구체적 대안 제시는 없습니다. 핵심 특성은 충족하나 사소한 부분이 미흡합니다."
-    }
-   },
-   "passed": true,
-   "detail": "judge=4"
-  },
   {
    "id": 7,
    "category": "positive",
@@ -75,43 +44,15 @@
      "score": 5,
      "missing_traits": [],
      "forbidden_found": [],
-     "reasoning": "답변은 expected_traits를 모두 충족합니다. 1) 여름을 巳午未월로 명시하고 乙巳월(2027-05-06~06-05), 丙午월(2027-06-06~07-06), 丁未월(2027-07-07~08-07) 날짜 범위를 정확히 안내했습니다. 2) 일본 교토, 인도네시아 발리 우붓, 캐나다 밴프 등 구체적인 해외 여행지를 추천했습니다. 3) 용신 木·土·火 오행과 동쪽·남쪽·북동쪽 방위를 근거로 제시했습니다. Forbidden 항목도 없습니다 - 모두 실존하는 해외 장소이며 국내 여행지는 추천하지 않았습니다."
+     "reasoning": "답변은 expected_traits의 모든 요소를 충족합니다. 1) 여름을 巳午未월(乙巳·丙午·丁未)로 명확히 정의하고 2027년 날짜 범위(05-06~08-07)를 제시했고, 2) 일본 교토, 인도네시아 발리 우붓, 캐나다 밴프 등 구체적인 해외 여행지를 추천했으며, 3) 용신 土·火·木과 각 방위(동쪽, 남쪽, 북동쪽)를 근거로 제시했습니다. Forbidden 항목도 없습니다 - 모두 실존하는 해외 장소이며 국내 여행지는 추천하지 않았습니다."
     }
    },
    "passed": true,
    "detail": "judge=5"
   },
   {
-   "id": 9,
-   "category": "negative",
-   "status": "ok",
-   "checks": {
-    "tools": {
-     "expected": [
-      "search_travel"
-     ],
-     "called": [
-      "calculate_saju",
-      "get_luck_calendar",
-      "retrieve_docs",
-      "search_travel"
-     ],
-     "missing": []
-    },
-    "judge": {
-     "version": "v2",
-     "score": 5,
-     "missing_traits": [],
-     "forbidden_found": [],
-     "reasoning": "답변은 expected_traits를 모두 충족합니다. 1) \"남극은(는) 장소 DB에 없어\" 및 \"남극은 데이터베이스에 없어 상세한 오행 분석을 할 수 없습니다\"라고 명확히 안내했고, 2) DB에 없어서 달의 기운만으로 평가했다고 근거를 밝혀 근거 없는 평가를 하지 않았으며, 3) \"대안으로 안동 하회마을, 보성도 고려해 보세요\"라고 DB 내 대안을 제시했습니다. Forbidden 항목인 남극의 구체적 일정·가격·명소를 지어내거나 DB에 없는 장소를 추천하는 내용은 전혀 없습니다."
-    }
-   },
-   "passed": true,
-   "detail": "judge=5"
-  },
-  {
-   "id": 12,
-   "category": "negative",
+   "id": 14,
+   "category": "edge",
    "status": "ok",
    "checks": {
     "tools": {
@@ -130,7 +71,7 @@
      "score": 5,
      "missing_traits": [],
      "forbidden_found": [],
-     "reasoning": "조회 가능 범위(2026-10-08 ~ 2027-10-07)를 명확히 안내했고, 범위 밖인 2028년 3월에 대해 월운 간지를 제시하거나 단정하지 않았으며, 범위 안에서 이사하기 좋은 여러 달을 구체적으로 제시하여 모든 기대 특성을 충족했습니다."
+     "reasoning": "답변은 expected_traits의 모든 요소를 충족합니다. 1) 기간이 戊戌월(~11-06)과 己亥월(11-07~) 두 절기 월에 걸친다는 점을 명확히 설명했고, 2) 戊戌월은 편관 주도의 활동적 운, 己亥월은 정관 주도의 안정적 운으로 두 달의 기운을 비교했으며, 3) 절입일 11월 7일을 기준으로 월이 바뀐다는 점을 정확히 안내했습니다. Forbidden 항목인 '한 달로만 단정'하거나 '양력 11월 전체를 하나의 월운으로 설명'하는 내용은 전혀 없습니다."
     }
    },
    "passed": true,

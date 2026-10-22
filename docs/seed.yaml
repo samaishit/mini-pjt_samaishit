@@ -57,6 +57,11 @@ constraints:
 - RAGAS faithfulness, answer_relevancy, context_precision and context_recall are computed
   only over the 16 non-guardrail rows and reported as aggregates; they are not a per-row
   gate, and numeric targets are set after the round-1 baseline
+- 'RAGAS uses JUDGE_MODEL as its evaluator LLM. Each metric is reported as a mean plus
+  n_valid/n_eligible, where eligible rows are non-guardrail rows with non-empty contexts.
+  A metric with n_valid below 75% of the eligible rows (e.g. after Bedrock throttling)
+  is reported as "not measured", with no mean and no round-to-round delta, and is
+  rerun after the quota resets'
 - RAGAS references live in evaluation/references.json, keyed by CSV row id (reference
   gist plus expected doc_ids), for the 16 non-guardrail rows
 - Smoke-test RAGAS on Day 8 with the Bedrock LLM and Titan embeddings; fallback 1
@@ -114,25 +119,46 @@ constraints:
 - Hybrid RAG uses one Chroma collection (persisted under a project-relative path resolved
   from __file__, Bedrock amazon.titan-embed-text-v2:0, us-east-1, built once by a
   build_index script) plus an in-memory BM25 (rank-bm25 with the kiwipiepy POS-filtered
-  tokenizer, pre-filtered by doc_type), fused with EnsembleRetriever using 0.5/0.5
-  as the baseline weights and weighted RRF c=60 set explicitly; top-k 3 per side and
-  3 after fusion; no reranking
+  tokenizer, pre-filtered by doc_type), fused with EnsembleRetriever using weights
+  0.2/0.8 (BM25/vector, src/retriever.py WEIGHTS) and weighted RRF c=60 set explicitly;
+  top-k 3 per side and 3 after fusion; no reranking
 - 'Corpus: hand-written paraphrased rule docs (오행/십성/용신/월운) chunked by markdown header
   into about 30-50 chunks with doc_id rule:<topic>:<slug>, plus the 70 place rows
   rendered as docs with doc_id = place id; doc_type/topic metadata'
 - Retrieval is implemented once as retrieve_docs(query, doc_type=None, k=3); specialists
   call it through LLM tools with a fixed doc_type (retrieve_rule_docs, retrieve_place_docs),
-  and every call is traced with type=retrieval and name=retrieve_docs; saju_agent calls
-  it at least once whenever its report interprets 용신, 오행, 십성 or good/caution months
+  and every call is traced with type=retrieval and name=retrieve_docs; before the Supervisor
+  runs, the graph pre-retrieves rule docs for the saju, travel and plan routes (search
+  results plus fixed doc ids per agent, e.g. rule:direction:oheng for travel, rule:travel:plan-rating
+  for plan) and hands them to the agents
 - Query expansion is deterministic (용신 오행 names, month branch/element, direction keywords),
   with no LLM
-- Ensemble weight variants 0.2/0.5/0.8 (BM25 share) are compared on the eval set
-  in round 1 and round 2; weight and RAGAS deltas are reported only between rounds
-  that used the same answer model, and cross-model deltas are marked non-comparable
+- 'Ensemble weights are chosen once, offline, by evaluation/retrieval_sweep.py: 30
+  rule-doc queries (5 eval rows + 25 paraphrased probes), top-k 3, RRF c=60, BM25 shares
+  0.2/0.5/0.8/1.0/0.0, scored by hit@3 and MRR@3 and written to evaluation/runs/retrieval_sweep.json.
+  Selection rule: the best MRR@3 among weightings where both shares are above 0 (0.2/0.8:
+  hit@3 0.633, MRR@3 0.494 vs 0.5/0.5: 0.600/0.428); pure vector (MRR@3 0.561) is
+  excluded to keep the course hybrid, and BM25 alone found probes the vector side missed.
+  Round 1 used 0.5/0.5; rounds do not re-run weight variants live, and the round reports
+  cite the sweep, calling the gaps indicative (n=30)'
+- RAGAS and judge deltas are reported only between rounds that used the same answer
+  model; cross-model deltas are marked non-comparable
 - Answers are structured output claims [{text, doc_ids}]; output validation checks
   that every cited doc_id exists in contexts and that every must-ground claim cites
   one (간지/용신/month ranges -> mcp:saju; interpretation -> rule chunks; places -> place
   ids or search tool output); violations trigger regeneration or the claim is dropped
+- 'Answers are composed in two layers. Code builds the claims that come straight from
+  tool results: the monthly travel table from recommend_travel (with a 용신 basis line,
+  each pick''s direction, 용신 match and place features), plan ratings from evaluate_plan
+  (solar month -> 절기 month, 좋음/보통/주의, reasons, DB alternatives or better move months),
+  date spans split at 절입일, saju notes (lunar, leap month, unknown time, season definition)
+  and the rule-source line. The LLM writes only section summaries; when code claims
+  exist, the LLM''s month-by-month, place and solar-month sentences in that section
+  are replaced, and for plan-only questions its travel, move and residence sections
+  are replaced by the plan ratings'
+- Output validation also flags a claim that guesses the masked birth year or month
+  (e.g. '12월생', '1988년생'); 간지 month ranges whose dates differ from the saju summary
+  are corrected from it before validation
 - MCP tool outputs are included in contexts with source=tool and doc_ids such as mcp:saju,
   mcp:search_travel, mcp:search_regions
 - '[doc_id] tags are not shown in the user-facing answer text'
@@ -250,8 +276,10 @@ acceptance_criteria:
 - description: Every claim in an answer is grounded. Each claim cites doc_ids that
     exist in the returned contexts. 간지, 용신 and month ranges cite mcp:saju. Interpretations
     cite rule chunks. Places cite place ids or search tool output and come only from
-    tool-ranked candidates. A claim that still violates these rules after one regeneration
-    is removed from the answer.
+    tool-ranked candidates. No claim guesses the masked birth year or month. All claims,
+    whether written by the LLM or built by code, pass the same checks; only LLM-written
+    claims are regenerated once and then removed if they still violate, and a code-built
+    claim that fails the checks is a test failure.
   semantic_ac_key: ac_c3d3b1819c812130
   verify_command: python -m unittest tests.test_output_validation
   expected_artifacts:
@@ -305,17 +333,20 @@ acceptance_criteria:
   - evaluation/references.json
   output_assertion: OK
 - description: 'Run live through the real POST /query path with the per-row rules
-    applied by the evaluation harness, the latest committed round meets the pass bar:
-    at least 20 of 24 rows and guardrail 8/8, with the answer model and the judge model
-    recorded. The full-scope rows (those whose expected_tools include both search_travel
-    and search_regions: the full-year report and the travel+move plan evaluation)
-    pass, which shows monthly domestic and overseas picks, a residence Top 3 with good
-    and bad move months, and 좋음/보통/주의 plan ratings. The round 1 and round 2 reports
-    record both models, the pass results, RAGAS 4-metric aggregates over the 16 non-guardrail
-    rows, and the 0.2/0.5/0.8 weight comparison. The pass count is recomputed from
-    the committed per-row scores, not read from report prose.'
+    applied by the evaluation harness, the final round 2 run meets the pass bar: at
+    least 20 of 24 rows and guardrail 8/8, with the answer model and the judge model
+    recorded. The final committed run is always evaluation/runs/round2.json and round2_scores.json;
+    earlier runs keep a suffix (_draft, _rerunN) and are listed in the round 2 report
+    history, and the report presents the final run, not the best rerun. The full-scope
+    rows (those whose expected_tools include both search_travel and search_regions:
+    the full-year report and the travel+move plan evaluation) pass, which shows monthly
+    domestic and overseas picks, a residence Top 3 with good and bad move months, and
+    좋음/보통/주의 plan ratings. The round 1 and round 2 reports record both models, the
+    pass results, RAGAS 4-metric aggregates with valid-row counts over the non-guardrail
+    rows, and a reference to evaluation/runs/retrieval_sweep.json. The pass count is
+    recomputed from the committed per-row scores, not read from report prose.'
   semantic_ac_key: ac_4c120ca69940cd60
-  verify_command: python -c "import json,glob,csv;f=sorted(glob.glob('evaluation/runs/round*_scores.json'))[-1];d=json.load(open(f,encoding='utf-8'));s=d['scores'];n=len(s);p=sum(1
+  verify_command: python -c "import json,glob,csv;f='evaluation/runs/round2_scores.json';assert json.load(open('evaluation/runs/retrieval_sweep.json',encoding='utf-8'))['results'];d=json.load(open(f,encoding='utf-8'));s=d['scores'];n=len(s);p=sum(1
     for x in s if x['passed']);g=[x for x in s if x['category']=='guardrail'];assert
     n==24 and p*5>=n*4 and len(g)==8 and all(x['passed'] for x in g),(f,p,n);assert
     d['summary'].get('judge_model'),'judge model missing';assert json.load(open(f.replace('_scores',''),encoding='utf-8'))['model'],'answer
@@ -356,21 +387,20 @@ assumptions:
   with a disclaimer (from CLAUDE.md)
 - Month boundaries are 절입일 judged at 23:59 KST, and a plan's solar month maps to the
   절기 month containing its 15th day (from CLAUDE.md)
-- Tests use the standard-library unittest runner (pytest is not installed). tests/test_birth_parser.py
-  and tests/test_guards.py exist; tests/test_reference_date.py, tests/test_retriever.py,
-  tests/test_output_validation.py, tests/test_api.py, tests/test_privacy.py and tests/test_eval_rules.py
-  are still to be written, and all run without Bedrock, using mocks where an LLM step
-  is involved
+- Tests use the standard-library unittest runner (pytest is not installed). All unit
+  tests live in tests/ (test_birth_parser, test_guards, test_reference_date, test_retriever,
+  test_output_validation, test_api, test_privacy, test_eval_rules) and run without
+  Bedrock via `python -m unittest discover -s tests -t .`, using stubs where an LLM
+  step is involved; test_eval_rules checks the evaluation harness (run_eval.py)
 - data/places/regions.json and data/places/travel.json are JSON objects with a _meta
   key plus a regions / travel list
 - evaluation/references.json is a JSON object whose keys are CSV row ids plus a _meta
   key
 - The judge uses JUDGE_MODEL (Sonnet 4.5 by default), independent of SAJU_LLM_MODEL,
-  at temperature 0, scoring 1-5 once, and Bedrock transient errors are retried twice;
-  round 1 was answered and judged by Haiku 4.5 before this rule and is re-judged with
-  JUDGE_MODEL once the Sonnet quota resets
-- The evaluation harness (run_eval.py) is checked by tests/test_eval_rules.py, which
-  is still to be written
+  at temperature 0, scoring 1-5 once, and Bedrock transient errors are retried twice
+- Round history (answer model, judge model, pass count per run, including re-judged
+  and suffixed runs) is kept only in evaluation/runs/ and the round reports, not in
+  this seed
 - Package versions follow the reference repo C:\Users\SDS\Desktop\sds-ax-practice
   (from CLAUDE.md)
 ontology_schema:
@@ -437,8 +467,11 @@ ontology_schema:
     required: false
   - name: claims
     type: array
-    description: Structured answer claims [{text, doc_ids}] checked by output validation
-    condition: present only for answers composed by the LLM (not refusals or clarifications)
+    description: 'Structured answer claims [{section, text, doc_ids}] checked by output
+      validation; each claim is either LLM-written (section summaries) or code-built
+      from tool results (travel table, plan ratings, date-span split, saju notes, rule-source
+      line)'
+    condition: present for every composed answer (not refusals or clarifications)
     required: false
   - name: answer
     type: string
@@ -517,7 +550,8 @@ evaluation_principles:
   weight: 0.8
 - name: retrieval_quality
   description: RAGAS faithfulness, answer_relevancy, context_precision and context_recall
-    aggregates improve from round 1 to round 2
+    aggregates improve from round 1 to round 2, compared only for metrics that are valid
+    (n_valid at least 75% of eligible rows) in both rounds
   weight: 0.6
 exit_conditions:
 - name: pass_bar_met
@@ -555,4 +589,4 @@ metadata:
   - '[from-user] Full scope is must-ship by Day 10, nothing demoted to stretch; keep
     the forked Node mcp-saju with now + get_luck_calendar (verified by the full-scope
     rows in the pass-bar criterion)'
-  - Refined in 2 passes (see ~/.ouroboros/seed-revisions/interview_20261021_053303.md)
+  - Refined in 3 passes (see ~/.ouroboros/seed-revisions/interview_20261021_053303.md)

@@ -232,6 +232,42 @@ def pre_retrieve_rules(query: str, k: int = 3, extra_ids: list[str] | None = Non
     return _record_retrieval(query, docs, "rule")
 
 
+DATE_SPAN_RE = re.compile(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일\s*(?:부터|에서|~|∼|-)\s*(?:(\d{1,2})\s*월\s*)?(\d{1,2})\s*일")
+
+
+def split_date_spans(question: str) -> list[dict]:
+    """'11월 5일부터 10일까지' 같은 날짜 구간을 절입일 기준으로 절기 월마다 나눈다 (LLM 없이).
+
+    연도는 구간 시작일이 12개월 범위 안에 드는 해로 고른다. 범위 밖 구간은 건너뛴다.
+    """
+    chart = current().chart
+    if not chart:
+        return []
+    ref = date.fromisoformat(chart["reference_date"])
+    spans = []
+    for m1, d1, m2, d2 in DATE_SPAN_RE.findall(question):
+        m1, d1, d2 = int(m1), int(d1), int(d2)
+        m2 = int(m2) if m2 else m1
+        for y in (ref.year, ref.year + 1):
+            try:
+                start = date(y, m1, d1)
+                end = date(y + (1 if m2 < m1 else 0), m2, d2)
+            except ValueError:
+                break
+            parts = []
+            for m in chart["months"]:
+                lo = max(start, date.fromisoformat(m["start_date"]))
+                hi = min(end, date.fromisoformat(m["end_date"]))
+                if lo <= hi:
+                    parts.append({"month_ganzhi": m["month_ganzhi"], "start_date": m["start_date"],
+                                  "end_date": m["end_date"], "from": lo.isoformat(), "to": hi.isoformat()})
+            if parts:
+                spans.append({"from": start.isoformat(), "to": end.isoformat(), "parts": parts})
+                break
+    current().date_spans = spans
+    return spans
+
+
 def find_month(month: int, year: int | None = None) -> dict | None:
     """양력 '연·월'을 그 달 15일이 속한 절기 월로 바꾼다. 12개월 범위 밖이면 None."""
     chart = current().chart

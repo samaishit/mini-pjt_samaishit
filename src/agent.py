@@ -28,7 +28,10 @@ from src.tracing import RequestState, TraceCallback, start_request
 GANZHI_CHARS = set("甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # '己亥월(2026-11-07 ~ 2026-12-06)' 형태의 기간 표기 (교정 대상)
-MONTH_RANGE_RE = re.compile(r"([甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥])월\s*\(\s*\d{4}-\d{2}-\d{2}\s*[~∼-]\s*(?:\d{4}-)?\d{2}-\d{2}\s*\)")
+MONTH_RANGE_RE = re.compile(r"([甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥])월\s*\(\s*\d{4}-\d{2}-\d{2}\s*[~∼-]\s*(?:\d{4}-)?\d{2}-\d{2}"
+                            r"[^)\n]{0,12}\)")
+# 양력 'N월' 표기 (작성자가 절기 월 번호를 양력 월로 잘못 옮기는 경우를 거른다)
+SOLAR_MONTH_RE = re.compile(r"(?<![\d-])\d{1,2}\s*월(?!\s*\()")
 
 # 질문 의도 → 반드시 호출할 전문 에이전트 (결정론 키워드 규칙, Supervisor 에 힌트로 주고 누락 시 직접 보완)
 PLAN_EVAL_RE = re.compile(r"(\d{1,2}\s*월|내년|올해|이번)[^.?!]{0,30}(여행|이사)[^.?!]{0,20}(괜찮|어때|어떨|해도 될|가도 될)"
@@ -45,6 +48,9 @@ RULE_DOCS_BY_AGENT = {
     "travel_agent": ["rule:direction:oheng", "rule:travel:timing"],
     "plan_agent": ["rule:travel:plan-rating", "rule:residence:move-timing"],
 }
+# 답변 섹션 표시 순서
+SECTION_ORDER = {name: i for i, name in enumerate(
+    ["사주 요약", "월별 운세", "계획 평가", "여행 추천", "주거 추천", "이사 시기", "안내", "근거 자료"])}
 # 계획 전용 질문에서 코드가 만든 '계획 평가'로 대체하는 작성자 섹션
 PLAN_REPLACED_SECTIONS = {"계획 평가", "여행 추천", "이사 시기", "주거 추천"}
 
@@ -280,6 +286,9 @@ class SajuPlannerApp:
             labels = ", ".join(f"{i}번={months[i]['month_ganzhi']}월({months[i]['start_date']} ~ {months[i]['end_date']})"
                                for i in indices)
             content += f"\n[대상 절기 월 번호] {indices} → {labels} (절기 월 번호이며 양력 월이 아님)"
+        spans = tools.split_date_spans(s["masked"])
+        if spans:
+            content += "\n[날짜 구간의 절기 월 (절입일 기준, 그대로 인용)]\n" + "\n".join(self._span_text(sp) for sp in spans)
         extra = [d for name, ids in RULE_DOCS_BY_AGENT.items() if name in need for d in ids]
         if "saju_agent" in need or extra:
             # 해석 근거가 필요한 질문은 규칙 문서를 먼저 검색해 에이전트에게 함께 넘긴다 (RAG)
@@ -324,7 +333,7 @@ class SajuPlannerApp:
                         doc_ids=basis)]
         for idx in sorted(st.travel_picks):
             row, m = st.travel_picks[idx], months[idx]
-            parts, ids = [], ["mcp:saju"]
+            parts, ids, last = [], ["mcp:saju"], ""
             for scope, label in (("domestic", "국내"), ("overseas", "해외")):
                 pick = (row.get(scope) or {}).get("pick")
                 if not pick:
@@ -333,13 +342,17 @@ class SajuPlannerApp:
                 aspect = f"용신 {match} 기운" if match else f"{pick['elements'][0]} 기운"
                 if (pick.get("score_breakdown") or {}).get("direction"):
                     aspect += "·용신 방위"
-                parts.append(f"{label} {pick['name']}({pick['direction']}쪽, {aspect})")
+                place = next((p for p in tools.PLACES if p["id"] == pick["id"]), {})
+                feature = "·".join((place.get("env_tags") or [])[:2])
+                parts.append(f"{label} {pick['name']}({pick['direction']}쪽, {aspect}" + (f", {feature}" if feature else "") + ")")
                 ids.append(pick["id"])
+                last = pick["name"]
             if not parts:
                 continue
             note = " 일지와 충하는 달이라 일정에 여유를 두세요." if m["clash_with_day_branch"] else ""
             claims.append(Claim(section="여행 추천",
-                                text=f"{m['month_ganzhi']}월({m['start_date']} ~ {m['end_date']}): {', '.join(parts)}을(를) 추천합니다.{note}",
+                                text=f"{m['month_ganzhi']}월({m['start_date']} ~ {m['end_date']})에는 {', '.join(parts)}"
+                                     f"{josa(last, '을', '를')} 추천합니다.{note}",
                                 doc_ids=ids))
         return claims if len(claims) > 1 else []
 
@@ -404,6 +417,19 @@ class SajuPlannerApp:
                                        reports=s.get("reports", ""), travel_note=travel_note)
         answer = await self.composer.ainvoke(prompt, {"callbacks": [TraceCallback(st)]})
         return {"answer": answer, "attempts": s.get("attempts", 0) + 1}
+
+    @staticmethod
+    def _span_text(sp: dict) -> str:
+        """날짜 구간을 절기 월별로 나눈 안내 문장 (절입일 기준)."""
+        def md(iso: str) -> str:
+            return f"{int(iso[5:7])}월 {int(iso[8:10])}일"
+        pieces = [f"{md(p['from'])}~{md(p['to'])}은 {p['month_ganzhi']}월({p['start_date']} ~ {p['end_date']})" for p in sp["parts"]]
+        if len(sp["parts"]) == 1:
+            return f"{md(sp['from'])}~{md(sp['to'])}은 모두 {sp['parts'][0]['month_ganzhi']}월" \
+                   f"({sp['parts'][0]['start_date']} ~ {sp['parts'][0]['end_date']})에 속합니다."
+        turns = ", ".join(f"{md(p['start_date'])}" for p in sp["parts"][1:])
+        return (f"절기 월은 양력 1일이 아니라 절입일({turns})에 바뀌므로 이 기간은 두 절기 월에 걸칩니다: "
+                + ", ".join(pieces) + "입니다.")
 
     def _plan_only(self) -> bool:
         """계획 평가만 필요한 질문인가 (여행·주거 추천을 함께 묻지 않음)."""
@@ -509,12 +535,20 @@ class SajuPlannerApp:
         if travel:
             # 월별 표는 코드가 만들므로 작성자가 쓴 월별·장소 문장은 빼고 요약 문장만 남긴다 (중복·오표기 방지)
             claims = [c for c in claims if not (c.section == "여행 추천" and
-                                                (MONTH_RANGE_RE.search(c.text) or tools.lookup_place(c.text, "travel")))]
+                                                (MONTH_RANGE_RE.search(c.text) or tools.lookup_place(c.text, "travel")
+                                                 or SOLAR_MONTH_RE.search(c.text)))]
         plan = self._plan_claims() if self._plan_only() else []
         if plan:
             claims = [c for c in claims if c.section not in PLAN_REPLACED_SECTIONS]
             pos = max((i for i, c in enumerate(claims) if c.section == "사주 요약"), default=-1) + 1
             claims[pos:pos] = plan
+        spans = [Claim(section="월별 운세", text=self._span_text(sp), doc_ids=["mcp:saju"])
+                 for sp in self._state().date_spans]
+        if spans:
+            pos = next((i for i, c in enumerate(claims) if c.section == "월별 운세"), None)
+            if pos is None:
+                pos = max((i for i, c in enumerate(claims) if c.section == "사주 요약"), default=-1) + 1
+            claims[pos:pos] = spans
         notes = self._note_claims()
         for n in notes:
             pos = max((i for i, c in enumerate(claims) if c.section == n.section), default=-1)
@@ -523,6 +557,8 @@ class SajuPlannerApp:
             # 작성자가 쓴 여행 요약 문장 바로 뒤(없으면 맨 끝)에 월별 여행 표를 붙인다
             last_travel = max((i for i, c in enumerate(claims) if c.section == "여행 추천"), default=len(claims) - 1)
             claims[last_travel + 1:last_travel + 1] = travel
+        # 섹션은 정해진 순서로 보여 준다 (같은 섹션 안의 순서는 유지)
+        claims.sort(key=lambda c: SECTION_ORDER.get(c.section, SECTION_ORDER["안내"] - 0.5))
         source = self._source_claim(claims)
         if source:
             claims.append(source)
