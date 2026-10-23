@@ -1,0 +1,106 @@
+{
+ "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+ "n": 14,
+ "skipped_no_context": [
+  "10",
+  "11"
+ ],
+ "means": {
+  "faithfulness": null,
+  "answer_relevancy": null,
+  "context_precision": null,
+  "context_recall": null
+ },
+ "valid": {
+  "faithfulness": 5,
+  "answer_relevancy": 7,
+  "context_precision": 6,
+  "context_recall": 10
+ },
+ "per_row": {
+  "1": {
+   "faithfulness": null,
+   "answer_relevancy": 0.193,
+   "context_precision": 0.438,
+   "context_recall": 1.0
+  },
+  "2": {
+   "faithfulness": null,
+   "answer_relevancy": 0.408,
+   "context_precision": 0.554,
+   "context_recall": 0.667
+  },
+  "3": {
+   "faithfulness": 0.727,
+   "answer_relevancy": 0.31,
+   "context_precision": 0.629,
+   "context_recall": 0.667
+  },
+  "4": {
+   "faithfulness": null,
+   "answer_relevancy": 0.41,
+   "context_precision": 0.365,
+   "context_recall": 1.0
+  },
+  "5": {
+   "faithfulness": 0.677,
+   "answer_relevancy": 0.371,
+   "context_precision": 0.5,
+   "context_recall": 0.667
+  },
+  "6": {
+   "faithfulness": 0.833,
+   "answer_relevancy": 0.242,
+   "context_precision": 0.867,
+   "context_recall": 1.0
+  },
+  "7": {
+   "faithfulness": 0.717,
+   "answer_relevancy": 0.374,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "8": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "9": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": 1.0
+  },
+  "12": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": 1.0
+  },
+  "13": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": 0.667
+  },
+  "14": {
+   "faithfulness": 0.63,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "15": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": null
+  },
+  "16": {
+   "faithfulness": null,
+   "answer_relevancy": null,
+   "context_precision": null,
+   "context_recall": 1.0
+  }
+ }
+}

@@ -47,31 +47,31 @@
 
 | 지표 | 평균 | 유효 행 |
 |---|---|---|
-| faithfulness | 측정 불가 | 9/14 |
-| answer_relevancy | 0.265 | 14/14 |
-| context_precision | 0.602 | 14/14 |
-| context_recall | 0.905 | 14/14 |
+| faithfulness | 측정 불가 | 5/14 |
+| answer_relevancy | 측정 불가 | 7/14 |
+| context_precision | 측정 불가 | 6/14 |
+| context_recall | 측정 불가 | 10/14 |
 
 - 유효 행이 대상의 75% 미만인 지표는 '측정 불가'로 두고 라운드 비교에서 뺀다
 - 대상 14건 (guardrail 제외, contexts 없는 되묻기 응답 제외: 10, 11)
-- 평가 LLM `global.anthropic.claude-sonnet-4-5-20250929-v1:0`, 임베딩 Titan v2
+- 평가 LLM `us.anthropic.claude-sonnet-4-5-20250929-v1:0`, 임베딩 Titan v2
 
 | id | faithfulness | answer_relevancy | context_precision | context_recall |
 |---|---|---|---|---|
-| 1 | None | 0.192 | 0.44 | 1.0 |
-| 2 | None | 0.391 | 0.6 | 0.667 |
-| 3 | 0.784 | 0.319 | 0.629 | 0.667 |
-| 4 | 0.667 | 0.322 | 0.365 | 1.0 |
-| 5 | None | 0.368 | 0.309 | 0.667 |
-| 6 | 0.849 | 0.175 | 0.867 | 1.0 |
-| 7 | 0.814 | 0.417 | 0.643 | 1.0 |
-| 8 | 0.717 | 0.195 | 0.583 | 1.0 |
-| 9 | None | 0.238 | 0.148 | 1.0 |
-| 12 | 0.784 | 0.0 | 0.625 | 1.0 |
-| 13 | None | 0.201 | 1.0 | 0.667 |
-| 14 | 0.792 | 0.332 | 0.698 | 1.0 |
-| 15 | 0.739 | 0.402 | 0.618 | 1.0 |
-| 16 | 0.827 | 0.151 | 0.903 | 1.0 |
+| 1 | None | 0.193 | 0.438 | 1.0 |
+| 2 | None | 0.408 | 0.554 | 0.667 |
+| 3 | 0.727 | 0.31 | 0.629 | 0.667 |
+| 4 | None | 0.41 | 0.365 | 1.0 |
+| 5 | 0.677 | 0.371 | 0.5 | 0.667 |
+| 6 | 0.833 | 0.242 | 0.867 | 1.0 |
+| 7 | 0.717 | 0.374 | None | None |
+| 8 | None | None | None | None |
+| 9 | None | None | None | 1.0 |
+| 12 | None | None | None | 1.0 |
+| 13 | None | None | None | 0.667 |
+| 14 | 0.63 | None | None | None |
+| 15 | None | None | None | None |
+| 16 | None | None | None | 1.0 |
 
 ## 실패 분석과 개선 계획
 
