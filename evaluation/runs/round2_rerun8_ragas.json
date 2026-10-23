@@ -12,7 +12,7 @@
   "context_recall": 0.905
  },
  "valid": {
-  "faithfulness": 4,
+  "faithfulness": 9,
   "answer_relevancy": 14,
   "context_precision": 14,
   "context_recall": 14
@@ -31,13 +31,13 @@
    "context_recall": 0.667
   },
   "3": {
-   "faithfulness": 0.644,
+   "faithfulness": 0.784,
    "answer_relevancy": 0.319,
    "context_precision": 0.629,
    "context_recall": 0.667
   },
   "4": {
-   "faithfulness": null,
+   "faithfulness": 0.667,
    "answer_relevancy": 0.322,
    "context_precision": 0.365,
    "context_recall": 1.0
@@ -49,19 +49,19 @@
    "context_recall": 0.667
   },
   "6": {
-   "faithfulness": 0.878,
+   "faithfulness": 0.849,
    "answer_relevancy": 0.175,
    "context_precision": 0.867,
    "context_recall": 1.0
   },
   "7": {
-   "faithfulness": 0.821,
+   "faithfulness": 0.814,
    "answer_relevancy": 0.417,
    "context_precision": 0.643,
    "context_recall": 1.0
   },
   "8": {
-   "faithfulness": 0.804,
+   "faithfulness": 0.717,
    "answer_relevancy": 0.195,
    "context_precision": 0.583,
    "context_recall": 1.0
@@ -73,7 +73,7 @@
    "context_recall": 1.0
   },
   "12": {
-   "faithfulness": null,
+   "faithfulness": 0.784,
    "answer_relevancy": 0.0,
    "context_precision": 0.625,
    "context_recall": 1.0
@@ -85,19 +85,19 @@
    "context_recall": 0.667
   },
   "14": {
-   "faithfulness": null,
+   "faithfulness": 0.792,
    "answer_relevancy": 0.332,
    "context_precision": 0.698,
    "context_recall": 1.0
   },
   "15": {
-   "faithfulness": null,
+   "faithfulness": 0.739,
    "answer_relevancy": 0.402,
    "context_precision": 0.618,
    "context_recall": 1.0
   },
   "16": {
-   "faithfulness": null,
+   "faithfulness": 0.827,
    "answer_relevancy": 0.151,
    "context_precision": 0.903,
    "context_recall": 1.0

@@ -13,19 +13,20 @@ flowchart TD
 
     GI["guard_input<br/>제3자 규칙 → 출생 정보 파서 → 입력 가드(규칙 + LLM)"]
     GI -->|"차단·되묻기<br/>state.response 있음"| END_FIXED(["고정 문구 응답<br/>contexts = [ ]"])
-    GI -->|통과| SAJU
+    GI -->|"통과 (입력 가드 LLM 을 쓴 경우)<br/>saju·supervisor 를 가드와 동시에 미리 실행함"| COMP
+    GI -->|"통과 (규칙만 쓴 경우)"| SAJU
 
     SAJU["saju<br/>LLM 없이 사주 MCP 직접 호출<br/>calculate_saju + get_luck_calendar → mcp:saju"]
     SAJU --> SUP
 
-    SUP["supervisor<br/>의도 라우터 + 규칙 문서 선검색 + Supervisor 실행<br/>누락 에이전트·추천 도구 직접 보완"]
+    SUP["supervisor<br/>의도 라우터 + 규칙 문서 선검색 + Supervisor 선택<br/>고른 에이전트 동시 실행 · 추천 도구 직접 보완"]
     SUP --> COMP
 
     COMP["compose<br/>Bedrock LLM with_structured_output(StructuredAnswer)<br/>claims[ section, text, doc_ids ]"]
     COMP --> GO
 
     GO["guard_output<br/>기간 교정 · doc_id 태그 제거 · 근거·금칙어·용신 오기 검사"]
-    GO -->|"위반 있음 그리고 attempts < 2"| COMP
+    GO -->|"위반 있음 그리고 attempts < 2<br/>(부동산 부분 거절의 시세 문장은 재생성 없이 제거)"| COMP
     GO -->|"위반 없음 또는 2회째<br/>(2회째 위반 문장은 제거)"| FIN
 
     FIN["finalize<br/>코드 문장 조립 → 코드 문장 검사 → 한글(한자) 표기 → 렌더링"]
@@ -34,11 +35,11 @@ flowchart TD
 
 | 노드 | 함수 | LLM | 주요 trace step |
 |---|---|---|---|
-| `guard_input` | `guard_input` | 입력 가드 판별 1회(치환 문장만) | `guard:input`, `parse:birth` |
+| `guard_input` | `guard_input` (+ 동시에 `_prepare` = `saju` → `run_supervisor`) | 입력 가드 판별 1회(치환 문장만) | `guard:input`, `parse:birth`, `llm:input_guard` |
 | `saju` | `saju` → `tools.compute_chart` | 없음 | `tool:calculate_saju`, `tool:get_luck_calendar` (출력만 기록) |
-| `supervisor` | `run_supervisor` | Supervisor + 전문 에이전트 | `route`, `retrieve`, `agent:*`, `agent_tool:*`, `llm:agent` |
+| `supervisor` | `run_supervisor` | Supervisor 선택 1회 + 전문 에이전트(동시 실행) | `route`, `retrieve`, `agent:*`, `agent_tool:*`, `llm:agent` |
 | `compose` | `compose` | 답변 작성 1회(+재생성 최대 1회) | `llm:compose` |
-| `guard_output` | `guard_output` | 없음 | `guard:output` (`month_range_repair`, `doc_tag_strip`, `output_guard`, `drop`) |
+| `guard_output` | `guard_output` | 없음 | `guard:output` (`month_range_repair`, `doc_tag_strip`, `partial_refusal_drop`, `output_guard`, `drop`) |
 | `finalize` | `finalize` | 없음 | `retrieve`(용어 풀이 근거), `guard:output`(`code_claim_check`) |
 
 ## 2. `guard_input` 내부 순서
@@ -48,14 +49,21 @@ flowchart LR
     Q["질문 원문"] --> TP{"제3자 규칙<br/>check_third_party<br/>(원문 대상)"}
     TP -->|해당| R1(["third_party 거절"])
     TP -->|아님| P["출생 정보 파서 parse<br/>원본 생년월일 → BIRTH 치환"]
-    P --> IG{"입력 가드 input_guard<br/>규칙 1차 → LLM 2차<br/>(치환 문장만 전송)"}
-    IG -->|block| R2(["injection · off_topic · real_estate · explicit 거절"])
-    IG -->|allow / partial| CL{"파서 되묻기?<br/>2자리 연도·달력 미표기·없는 날짜·성별 누락 등"}
+    P --> RC{"규칙 가드 rule_check<br/>(치환 문장)"}
+    RC -->|block| R2(["injection · off_topic · real_estate · explicit 거절"])
+    RC -->|partial| CL
+    RC -->|allow| LG["LLM 판별 llm_guard<br/>(치환 문장만 전송, 약 2초)"]
+    RC -->|"allow 이고 되묻기 아님"| SPEC["_prepare 미리 시작<br/>saju → run_supervisor<br/>(asyncio task)"]
+    LG -->|block| CANCEL["미리 시작한 작업 취소<br/>그 사이 trace·사주·contexts 폐기"] --> R2
+    LG -->|ok| CL{"파서 되묻기?<br/>2자리 연도·달력 미표기·없는 날짜·성별 누락 등"}
     CL -->|예| R3(["되묻기 문구"])
-    CL -->|아니오| NEXT(["saju 노드로<br/>masked, birth, decision"])
+    CL -->|"아니오 (미리 시작함)"| JOIN(["_prepare 결과(reports)를 받아<br/>compose 노드로"])
+    CL -->|"아니오 (규칙만 씀)"| NEXT(["saju 노드로<br/>masked, birth, decision"])
+    SPEC -.-> JOIN
 ```
 
 - 원본 생년월일은 파서와 사주 MCP 호출 인자에만 남는다. 이후 LLM 프롬프트·trace·로그에는 `<BIRTH>`만 있다.
+- 입력 가드 LLM 을 기다리는 동안 사주 계산과 전문 에이전트를 미리 돌린다. 차단되면 작업을 취소하고 그 사이의 trace·사주 요약·contexts 를 지우므로 거절 응답에는 아무것도 남지 않는다. 미리 돌린 에이전트 LLM 에는 차단될 질문도 들어가지만, 도구는 조회 전용이고 결과는 버린다.
 - `partial` 이면 정상 부분은 답하고, 거절할 부분의 고정 문구는 `finalize`에서 덧붙인다.
 
 ## 3. `supervisor` 노드 내부
@@ -69,25 +77,28 @@ flowchart TD
 
     subgraph SV["create_supervisor (langgraph-supervisor)"]
         direction TB
-        S["supervisor LLM<br/>post_model_hook = one_handoff_at_a_time<br/>(아직 보고하지 않은 에이전트 하나로만 넘김)"]
-        S -.->|transfer_to_saju_agent| A1["saju_agent<br/>retrieve_rule_docs · element_direction_map"]
-        S -.->|transfer_to_travel_agent| A2["travel_agent<br/>recommend_travel · get_travel · retrieve_place_docs"]
-        S -.->|transfer_to_residence_agent| A3["residence_agent<br/>recommend_residence · get_region · retrieve_place_docs"]
-        S -.->|transfer_to_plan_agent| A4["plan_agent<br/>evaluate_plan · recommend_travel"]
-        A1 --> S
-        A2 --> S
-        A3 --> S
-        A4 --> S
+        S["supervisor LLM 1회<br/>transfer_to_* 로 맡길 에이전트 선택<br/>post_model_hook = route_only<br/>(고른 이름을 기록하고 넘기기를 지워 바로 종료)"]
     end
 
-    SV --> MISS{"필수 에이전트 중<br/>보고 안 한 것?"}
-    MISS -->|있음| FB["누락 에이전트 직접 호출<br/>asyncio.gather 로 동시 실행"]
-    MISS -->|없음| DET
-    FB --> DET{"추천 도구가 불렸나?<br/>recommend_travel / recommend_residence"}
+    SV --> UNION["실행 목록 = 라우터 필수 에이전트 ∪ Supervisor 선택"]
+    UNION --> PAR
+
+    subgraph PAR["asyncio.gather 로 동시 실행 (각자 [이 에이전트의 담당] 범위를 받음)"]
+        direction LR
+        A1["saju_agent<br/>retrieve_rule_docs · element_direction_map"]
+        A2["travel_agent<br/>recommend_travel · get_travel · retrieve_place_docs"]
+        A3["residence_agent<br/>recommend_residence · get_region · retrieve_place_docs"]
+        A4["plan_agent<br/>evaluate_plan · recommend_travel"]
+    end
+
+    PAR --> DET{"추천 도구가 불렸나?<br/>recommend_travel / recommend_residence"}
     DET -->|안 불림| CALL["도구 직접 호출<br/>(규칙대로 계산)"]
     DET -->|불림| OUT
     CALL --> OUT(["reports + state 에 도구 결과<br/>travel_picks · residence · plan_results"])
 ```
+
+- langgraph-supervisor 는 넘기기를 하나씩 차례로 실행하고, 에이전트가 보고할 때마다 Supervisor LLM 을 다시 부른다(1년 계획 52초의 원인). 그래서 Supervisor 는 고르기만 하고 실행은 코드가 동시에 한다.
+- 여행·주거·계획 에이전트의 보고는 400토큰·bullet 4개 이내다. 표·Top 3·등급 문장은 코드가 도구 결과로 만들기 때문이다. 사주 에이전트는 800토큰.
 
 각 전문 에이전트는 `create_react_agent`로 만든 ReAct 루프다(LLM ↔ 도구). 도구는 아래 MCP 서버와 RAG를 부른다.
 

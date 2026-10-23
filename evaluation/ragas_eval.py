@@ -6,6 +6,7 @@
   (되묻기 응답처럼 LLM·검색 없이 끝난 행은 contexts 가 없어 RAGAS 가 정의되지 않으므로 제외하고 건수를 남긴다)
 - user_input 은 <BIRTH> 로 치환한 질문을 쓴다 (원본 생년월일을 평가 LLM 에 보내지 않음)
 - 결과: runs/roundN_ragas.json 저장, roundN_report.md 의 RAGAS 절을 채운다
+- 빈 값 보충: --metrics faithfulness --only-missing --timeout 1800 (긴 답변이 시간 초과된 행만 다시 계산)
 """
 import argparse
 import csv
@@ -48,7 +49,14 @@ def main():
     parser.add_argument("--round", type=int, required=True)
     parser.add_argument("--ids", help="쉼표로 구분한 id (점검용, 결과 파일·리포트는 쓰지 않음)")
     parser.add_argument("--metrics", help="일부 지표만 다시 계산해 기존 결과에 합친다 (예: faithfulness)")
+    parser.add_argument("--only-missing", action="store_true",
+                        help="--metrics 와 함께: 기존 결과에서 값이 빈 행만 다시 계산한다 (시간 초과·한도 초과 행 보충)")
+    parser.add_argument("--timeout", type=int, default=600, help="RAGAS 작업 하나의 제한 시간(초). 긴 답변의 faithfulness 는 늘린다")
+    parser.add_argument("--tag", help="결과를 runs/roundN_ragas_<tag>.json 에 따로 저장하고 리포트는 건드리지 않는다 "
+                                      "(평가 LLM 을 바꾼 참고 측정용, 예: JUDGE_MODEL=Haiku + --tag haiku)")
     args = parser.parse_args()
+    if args.only_missing and not args.metrics:
+        parser.error("--only-missing 은 --metrics 와 함께 쓴다")
     wanted = set(args.ids.split(",")) if args.ids else None
 
     results = json.loads((EVAL_DIR / "runs" / f"round{args.round}.json").read_text(encoding="utf-8"))["results"]
@@ -79,18 +87,25 @@ def main():
     all_metrics = {"faithfulness": faithfulness, "answer_relevancy": answer_relevancy,
                    "context_precision": context_precision, "context_recall": context_recall}
     run_metrics = [m.strip() for m in args.metrics.split(",")] if args.metrics else METRICS
-    result = evaluate(EvaluationDataset(samples=samples),
-                      metrics=[all_metrics[m] for m in run_metrics],
-                      llm=llm, embeddings=emb, run_config=RUN_CONFIG, show_progress=False,
-                      raise_exceptions=False)
-    df = result.to_pandas()
-    out_path = EVAL_DIR / "runs" / f"round{args.round}_ragas.json"
+    out_path = EVAL_DIR / "runs" / f"round{args.round}_ragas{'_' + args.tag if args.tag else ''}.json"
     prev = json.loads(out_path.read_text(encoding="utf-8")) if args.metrics and out_path.exists() else {}
-    per_row = {}
-    for cid, (_, row) in zip(ids, df.iterrows()):
-        per_row[cid] = dict((prev.get("per_row") or {}).get(cid, {m: None for m in METRICS}))   # 다시 계산하지 않은 지표는 유지
-        per_row[cid].update({m: (None if row[m] is None or (isinstance(row[m], float) and math.isnan(row[m]))
-                                 else round(float(row[m]), 3)) for m in run_metrics})
+    prev_rows = prev.get("per_row") or {}
+    # 다시 계산하지 않은 행·지표는 기존 값을 유지한다
+    per_row = {cid: dict(prev_rows.get(cid, {m: None for m in METRICS})) for cid in ids}
+    run_ids = ([cid for cid in ids if any(per_row[cid].get(m) is None for m in run_metrics)]
+               if args.only_missing else ids)
+    run_samples = [s for cid, s in zip(ids, samples) if cid in run_ids]
+    print(f"계산 대상 {len(run_ids)}건: {', '.join(run_ids) or '없음'}", flush=True)
+    if run_samples:
+        run_config = RunConfig(timeout=args.timeout, max_workers=RUN_CONFIG.max_workers,
+                               max_retries=RUN_CONFIG.max_retries, max_wait=RUN_CONFIG.max_wait)
+        result = evaluate(EvaluationDataset(samples=run_samples),
+                          metrics=[all_metrics[m] for m in run_metrics],
+                          llm=llm, embeddings=emb, run_config=run_config, show_progress=False,
+                          raise_exceptions=False)
+        for cid, (_, row) in zip(run_ids, result.to_pandas().iterrows()):
+            per_row[cid].update({m: (None if row[m] is None or (isinstance(row[m], float) and math.isnan(row[m]))
+                                     else round(float(row[m]), 3)) for m in run_metrics})
     means, valid = {}, {}
     for m in METRICS:
         vals = [v[m] for v in per_row.values() if v[m] is not None]
@@ -101,11 +116,10 @@ def main():
         return
     out = {"model": MODEL, "n": len(ids), "skipped_no_context": skipped, "means": means, "valid": valid,
            "per_row": per_row}
-    (EVAL_DIR / "runs" / f"round{args.round}_ragas.json").write_text(json.dumps(out, ensure_ascii=False, indent=1),
-                                                                    encoding="utf-8")
+    out_path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
 
     report = EVAL_DIR / f"round{args.round}_report.md"
-    if report.exists():
+    if report.exists() and not args.tag:   # 다른 평가 LLM 으로 낸 참고 결과는 리포트 표를 덮지 않는다
         table = ["| 지표 | 평균 | 유효 행 |", "|---|---|---|"]
         table += [f"| {m} | {means[m] if means[m] is not None else '측정 불가'} | {valid[m]}/{len(ids)} |" for m in METRICS]
         table += ["", f"- 유효 행이 대상의 {MIN_VALID_SHARE:.0%} 미만인 지표는 '측정 불가'로 두고 라운드 비교에서 뺀다",

@@ -149,6 +149,11 @@ def input_guard(masked_text: str, has_birth: bool, use_llm: bool = True) -> Guar
     decision = rule_check(masked_text, has_birth)
     if decision.action != "allow" or not use_llm:
         return decision
+    return llm_guard(masked_text, decision)
+
+
+def llm_guard(masked_text: str, decision: GuardDecision) -> GuardDecision:
+    """규칙 검사를 통과한 문장에 LLM 판별을 더한다 (사주 계산·에이전트와 동시에 돌릴 수 있게 분리)."""
     result = llm_check(masked_text)
     if result.category != "ok" and result.category in REFUSAL_MESSAGES and result.confidence >= 0.7:
         return GuardDecision("block", result.category, f"LLM 판별: {result.reason}")

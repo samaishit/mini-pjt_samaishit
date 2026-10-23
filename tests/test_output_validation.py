@@ -72,6 +72,16 @@ class TestRepairAndDrop(unittest.TestCase):
         self.assertEqual(self.app._repair_month_ranges(ans), 1)
         self.assertIn("己亥월(2026-11-07 ~ 2026-12-06)", ans.claims[0].text)
 
+    def test_hangul_month_range_repaired_from_chart(self):
+        # 2차 재실행에서 작성 LLM 이 간지를 한글로만 쓰고 날짜를 틀리게 적은 경우 (round3 8행)
+        make_state()
+        ans = StructuredAnswer(claims=[Claim(section="월별 운세", text="12월(기해월, 2025-11-07 ~ 2025-12-06)은 좋습니다.",
+                                             doc_ids=["mcp:saju"])])
+        self.assertEqual(self.app._repair_month_ranges(ans), 1)
+        self.assertEqual(ans.claims[0].text, "12월(기해월, 2026-11-07 ~ 2026-12-06)은 좋습니다.")
+        same = StructuredAnswer(claims=[Claim(section="월별 운세", text="이번월, 2026-01-01 ~ 2026-01-02", doc_ids=[])])
+        self.assertEqual(self.app._repair_month_ranges(same), 0)   # 사주 요약에 없는 읽기는 건드리지 않는다
+
     def test_missing_citations_repaired_without_regeneration(self):
         st = make_state()   # contexts: mcp:saju, rule:yongsin:overview, T-OS-KYOTO
         ans = StructuredAnswer(claims=[
@@ -307,22 +317,23 @@ class TestSummaryAndReasons(unittest.TestCase):
                       "10월이 이곳을 즐기기 좋은 때입니다.", text)
 
 
-class TestSupervisorHandoff(unittest.TestCase):
-    """Supervisor 의 동시 넘기기를 아직 보고하지 않은 에이전트 하나로 줄인다 (반복 넘기기 방지)."""
+class TestSupervisorRouteOnly(unittest.TestCase):
+    """Supervisor 는 맡길 에이전트를 고르기만 하고 끝난다 (실행은 run_supervisor 가 동시에)."""
 
-    def test_one_pending_handoff_kept(self):
+    def test_picks_recorded_and_handoffs_removed(self):
         from langchain_core.messages import AIMessage, HumanMessage
-        from src.agent import one_handoff_at_a_time
+        from src.agent import route_only
+        from src.tracing import start_request
+        st = start_request()
         tc = lambda n: {"name": f"transfer_to_{n}", "args": {}, "id": n, "type": "tool_call"}
-        calls = AIMessage(content="", tool_calls=[tc("saju_agent"), tc("travel_agent")], id="s1", name="supervisor")
-        first = one_handoff_at_a_time({"messages": [HumanMessage("q"), calls]})["messages"][0]
-        self.assertEqual([c["name"] for c in first.tool_calls], ["transfer_to_saju_agent"])
-        self.assertEqual(first.id, "s1")   # 같은 id 로 교체된다
-        done = AIMessage(content="보고", name="saju_agent")
-        nxt = one_handoff_at_a_time({"messages": [HumanMessage("q"), done, calls]})["messages"][0]
-        self.assertEqual([c["name"] for c in nxt.tool_calls], ["transfer_to_travel_agent"])
-        again = AIMessage(content="", tool_calls=[tc("saju_agent")], id="s2", name="supervisor")
-        self.assertEqual(one_handoff_at_a_time({"messages": [done, again]})["messages"][0].tool_calls, [])
+        calls = AIMessage(content="", tool_calls=[tc("saju_agent"), tc("travel_agent"), tc("saju_agent")],
+                          id="s1", name="supervisor")
+        out = route_only({"messages": [HumanMessage("q"), calls]})["messages"][0]
+        self.assertEqual(st.supervisor_pick, ["saju_agent", "travel_agent"])
+        self.assertEqual(out.tool_calls, [])
+        self.assertEqual(out.id, "s1")   # 같은 id 로 교체된다
+        route_only({"messages": [AIMessage(content="완료", id="s2", name="supervisor")]})
+        self.assertEqual(st.supervisor_pick, [])
 
 
 class TestNoTagLeak(unittest.TestCase):
