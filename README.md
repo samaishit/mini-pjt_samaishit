@@ -86,12 +86,14 @@ React 테스트 화면이다. 빌드 결과(`web/dist`)를 FastAPI 가 `/` 에�
 - 개발 모드: `uvicorn` 을 띄운 상태에서 `cd web && npm run dev` → http://localhost:5173 (API 는 8000 으로 프록시).
 
 ## RAGAS 평가 결과
-2차 최종 실행 기준, guardrail 을 뺀 16건 중 contexts 가 있는 14건 평균(되묻기 응답 10·11 제외). 평가 LLM Sonnet 4.5, 임베딩 Titan v2. 괄호는 1차 값.
+guardrail 을 뺀 16건 중 contexts 가 있는 14건 평균(되묻기 응답 10·11 제외). 평가 LLM Sonnet 4.5, 임베딩 Titan v2. 괄호는 1차 값.
+2차 값은 10-22 최종 답변(재실행 8, 속도 개선 전) 기준이다. 10-23 최종 답변(속도 개선 후)은 계산 중 Sonnet 4.5 일일 한도가 소진돼 4지표 모두 유효 75% 미만이라 평균을 내지 않았다. 둘 다 값이 있는 행끼리는 거의 같다(context_precision 1~6행 0.535 → 0.559, answer_relevancy 1~7행 0.312 → 0.330).
 - context_recall: **0.905** (0.822)
 - context_precision: **0.602** (0.835)
 - answer_relevancy: **0.265** (0.214)
-- faithfulness: **측정 보류** (0.519) — 유효 9/14(계산된 행 0.667~0.849). 남은 5건은 답변이 긴 행으로, 작업 시간 초과와 Sonnet 4.5 일일 토큰 한도 때문에 값이 비었다. 유효 행 75% 미만이면 평균을 내지 않는 규칙에 따라 보류했고, 한도가 풀리면 `ragas_eval.py --round 2 --metrics faithfulness --only-missing --timeout 1800` 으로 빈 행만 채운다.
-  - 참고: 같은 답변을 평가 LLM Haiku 4.5 로 따로 계산하면 **0.740** (유효 13/14, `runs/round2_ragas_haiku.json`). 평가 LLM 이 달라 1차 값과 직접 비교하지는 않는다. 두 모델 모두 값이 있는 9행 평균은 Haiku 0.760, Sonnet 0.775 다. 답변 모델도 Haiku 4.5 라 자기 답을 평가하는 셈이므로 참고값으로만 둔다.
+- faithfulness: **측정 보류** (0.519) — 유효 9/14(계산된 행 0.667~0.849). 남은 5건은 답변이 긴 행으로, 작업 시간 초과와 일일 토큰 한도 때문에 값이 비었다. 유효 행 75% 미만이면 평균을 내지 않는 규칙에 따라 보류했다.
+- 참고(평가 LLM Haiku 4.5): 최종 답변 기준 faithfulness **0.750**(13/14), answer_relevancy 0.323, context_precision 0.488, context_recall 0.920. 같은 Haiku 로 본 faithfulness 는 속도 개선 전 0.740 → 후 0.750 이다. 답변 모델도 Haiku 4.5 라 자기 답을 평가하는 셈이고 평가 LLM 이 달라 1차와 비교하지 않으므로 참고값으로만 둔다.
+- 한도가 풀리면 `ragas_eval.py --round 2 --metrics faithfulness,answer_relevancy,context_precision,context_recall --only-missing --timeout 1800` 으로 최종 답변의 빈 행만 채운다.
 
 해석과 행별 값은 [evaluation/round2_report.md](evaluation/round2_report.md). answer_relevancy 는 결론을 맨 앞에 둔 '한눈에 보기'로 올랐고, context_precision 은 사주 요약·용어 풀이 근거 문서를 contexts 에 더하면서 내려갔다.
 

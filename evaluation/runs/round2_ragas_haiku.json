@@ -1,0 +1,106 @@
+{
+ "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+ "n": 14,
+ "skipped_no_context": [
+  "10",
+  "11"
+ ],
+ "means": {
+  "faithfulness": 0.75,
+  "answer_relevancy": 0.323,
+  "context_precision": 0.488,
+  "context_recall": 0.92
+ },
+ "valid": {
+  "faithfulness": 13,
+  "answer_relevancy": 14,
+  "context_precision": 14,
+  "context_recall": 14
+ },
+ "per_row": {
+  "1": {
+   "faithfulness": null,
+   "answer_relevancy": 0.254,
+   "context_precision": 0.667,
+   "context_recall": 0.75
+  },
+  "2": {
+   "faithfulness": 0.628,
+   "answer_relevancy": 0.414,
+   "context_precision": 0.0,
+   "context_recall": 1.0
+  },
+  "3": {
+   "faithfulness": 0.69,
+   "answer_relevancy": 0.457,
+   "context_precision": 0.756,
+   "context_recall": 0.667
+  },
+  "4": {
+   "faithfulness": 0.839,
+   "answer_relevancy": 0.453,
+   "context_precision": 0.671,
+   "context_recall": 1.0
+  },
+  "5": {
+   "faithfulness": 0.672,
+   "answer_relevancy": 0.291,
+   "context_precision": 0.0,
+   "context_recall": 0.8
+  },
+  "6": {
+   "faithfulness": 0.608,
+   "answer_relevancy": 0.269,
+   "context_precision": 1.0,
+   "context_recall": 1.0
+  },
+  "7": {
+   "faithfulness": 0.638,
+   "answer_relevancy": 0.439,
+   "context_precision": 0.167,
+   "context_recall": 1.0
+  },
+  "8": {
+   "faithfulness": 0.843,
+   "answer_relevancy": 0.338,
+   "context_precision": 1.0,
+   "context_recall": 1.0
+  },
+  "9": {
+   "faithfulness": 0.922,
+   "answer_relevancy": 0.297,
+   "context_precision": 0.12,
+   "context_recall": 1.0
+  },
+  "12": {
+   "faithfulness": 0.885,
+   "answer_relevancy": 0.0,
+   "context_precision": 0.625,
+   "context_recall": 1.0
+  },
+  "13": {
+   "faithfulness": 0.778,
+   "answer_relevancy": 0.3,
+   "context_precision": 0.292,
+   "context_recall": 0.667
+  },
+  "14": {
+   "faithfulness": 0.7,
+   "answer_relevancy": 0.373,
+   "context_precision": 0.698,
+   "context_recall": 1.0
+  },
+  "15": {
+   "faithfulness": 0.787,
+   "answer_relevancy": 0.381,
+   "context_precision": 0.0,
+   "context_recall": 1.0
+  },
+  "16": {
+   "faithfulness": 0.756,
+   "answer_relevancy": 0.259,
+   "context_precision": 0.833,
+   "context_recall": 1.0
+  }
+ }
+}
